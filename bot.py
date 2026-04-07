@@ -19,7 +19,8 @@ PAYPAL_DETAILS = os.getenv("PAYPAL_DETAILS", "neo832002@yahoo.com")
 PRICE_RUB = os.getenv("PRICE_RUB", "300 рублей")
 PRICE_USD = os.getenv("PRICE_USD", "4$")
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Ваш публичный URL, например https://yourapp.onrender.com/webhook/<token>
+WEBHOOK_URL = "https://donat3d.onrender.com"  # Ваш публичный адрес
+FULL_WEBHOOK_URL = WEBHOOK_URL + WEBHOOK_PATH
 
 # --- ИНИЦИАЛИЗАЦИЯ ---
 logging.basicConfig(level=logging.INFO)
@@ -160,36 +161,36 @@ async def cmd_stat(message: types.Message):
         await message.answer(text[i:i+chunk_size])
 
 # --- FLASK WEBHOOK SERVER ---
+from flask import Flask, request, abort
+import asyncio
+import nest_asyncio
+import uvicorn
+
 app = Flask(__name__)
 
 @app.route(WEBHOOK_PATH, methods=["POST"])
 async def webhook_handler():
     if request.content_type != "application/json":
         abort(400)
-    update = types.Update(**await request.json)
+    data = await request.get_data()
+    update = types.Update.de_json(data)
     await dp.process_update(update)
     return "OK"
 
 async def on_startup():
     init_db()
-    await bot.set_webhook(WEBHOOK_URL + WEBHOOK_PATH)
-    logging.info("Webhook set to %s", WEBHOOK_URL + WEBHOOK_PATH)
+    await bot.set_webhook(FULL_WEBHOOK_URL)
+    logging.info("Webhook set to %s", FULL_WEBHOOK_URL)
 
 async def on_shutdown():
     await bot.delete_webhook()
     await bot.session.close()
 
 if __name__ == "__main__":
-    import nest_asyncio
-    import uvicorn
     nest_asyncio.apply()
-    import asyncio
-
     async def main():
         await on_startup()
-        # Запускаем Flask с uvicorn (ASGI)
         config = uvicorn.Config(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), log_level="info")
         server = uvicorn.Server(config)
         await server.serve()
-
     asyncio.run(main())
