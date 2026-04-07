@@ -1,19 +1,16 @@
 import os
-import asyncio
 import logging
 import sqlite3
 from datetime import datetime, timedelta, time
-from threading import Thread
-
-from flask import Flask
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.client.session.aiohttp import AiohttpSession
+from flask import Flask, request, abort
 
-# --- НАСТРОЙКИ (КОНФИГУРАЦИЯ) ---
+# --- НАСТРОЙКИ ---
 TOKEN = os.getenv("TOKEN", "8527322806:AAE570ZADxH89_9bDyNWO2JZ9WqEYJvjvJQ")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "-1003581309063"))
 ADMIN_ID = int(os.getenv("ADMIN_ID", "942900279"))
@@ -21,35 +18,18 @@ CARD_DETAILS = os.getenv("CARD_DETAILS", "2204120115044840")
 PAYPAL_DETAILS = os.getenv("PAYPAL_DETAILS", "neo832002@yahoo.com")
 PRICE_RUB = os.getenv("PRICE_RUB", "300 рублей")
 PRICE_USD = os.getenv("PRICE_USD", "4$")
-CHECK_TIME_MSK = time(9, 0)
+WEBHOOK_PATH = f"/webhook/{TOKEN}"
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Ваш публичный URL, например https://yourapp.onrender.com/webhook/<token>
 
-# --- WEB SERVER ДЛЯ RENDER (KEEP ALIVE) ---
-web_app = Flask(__name__)
-
-@web_app.route('/')
-def home():
-    return "Bot is running!"
-
-def run_web():
-    port = int(os.environ.get("PORT", 8080))
-    web_app.run(host='0.0.0.0', port=port)
-
-def keep_alive():
-    t = Thread(target=run_web)
-    t.daemon = True
-    t.start()
-
-# --- ИНИЦИАЛИЗАЦИЯ БОТА ---
+# --- ИНИЦИАЛИЗАЦИЯ ---
 logging.basicConfig(level=logging.INFO)
-session = AiohttpSession()
-bot = Bot(token=TOKEN, session=session)
+bot = Bot(token=TOKEN, session=AiohttpSession())
 dp = Dispatcher()
 
 # --- БАЗА ДАННЫХ ---
 def init_db():
     conn = sqlite3.connect("subscriptions.db")
     cur = conn.cursor()
-    # Добавим поле username и country для статистики
     cur.execute("""
         CREATE TABLE IF NOT EXISTS subs (
             user_id INTEGER PRIMARY KEY,
@@ -65,7 +45,6 @@ def add_subscription(user_id, days=30, username=None, country=None):
     conn = sqlite3.connect("subscriptions.db")
     cur = conn.cursor()
     expire_date = datetime.now() + timedelta(days=days)
-    # Вставляем или обновляем с username и country
     cur.execute("""
         INSERT OR REPLACE INTO subs (user_id, expire_date, username, country)
         VALUES (?, ?, ?, ?)
@@ -96,7 +75,7 @@ def get_all_subscribers():
 class PaymentStates(StatesGroup):
     waiting = State()
 
-# --- ОБРАБОТЧИКИ (HANDLERS) ---
+# --- ОБРАБОТЧИКИ ---
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message, state: FSMContext):
@@ -104,15 +83,15 @@ async def cmd_start(message: types.Message, state: FSMContext):
     uid = message.from_user.id
     expire = get_sub_info(uid)
 
-    # Получаем username и страну из объекта message.from_user
     username = message.from_user.username or "no_username"
-    country = "unknown"  # Telegram API не даёт страну напрямую, можно расширить через IP или внешние сервисы
+    country = "unknown"  # Telegram API не даёт страну напрямую
 
-    # Обновим данные пользователя в базе (если подписка есть или нет)
-    add_subscription(uid, days=0, username=username, country=country)  # days=0 чтобы не менять дату окончания
+    # Обновляем данные пользователя (не меняем дату окончания, если подписка есть)
+    add_subscription(uid, days=0, username=username, country=country)
 
     if expire:
-        return await message.answer(f"✅ Подписка активна до: {expire.strftime('%d.%m.%Y %H:%M')}")
+        await message.answer(f"✅ Подписка активна до: {expire.strftime('%d.%m.%Y %H:%M')}")
+        return
 
     builder = InlineKeyboardBuilder()
     builder.row(types.InlineKeyboardButton(text="💳 Оплатить / Pay", callback_data="pay"))
@@ -141,13 +120,10 @@ async def approve_pay(call: types.CallbackQuery):
         await call.answer("❌ Только админ может подтверждать оплату.", show_alert=True)
         return
     user_id = int(call.data.split("_")[1])
-
-    # Получим username и country из базы или обновим при подтверждении
-    # Для простоты обновим подписку с текущими username и country из Telegram
     try:
         user = await bot.get_chat(user_id)
         username = user.username or "no_username"
-        country = "unknown"  # Можно расширить, если есть данные
+        country = "unknown"
     except Exception:
         username = "unknown"
         country = "unknown"
@@ -162,7 +138,6 @@ async def approve_pay(call: types.CallbackQuery):
         await call.message.answer(f"Ошибка при создании ссылки: {e}")
     await call.answer()
 
-# --- Новая команда /stat для админа ---
 @dp.message(Command("stat"))
 async def cmd_stat(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -179,18 +154,42 @@ async def cmd_stat(message: types.Message):
         expire_str = expire_date if expire_date else "неизвестно"
         lines.append(f"@{username} / {user_id} / {country} / Подписка до: {expire_str}")
 
-    # Разбиваем сообщение на части по 4000 символов (лимит Telegram)
     chunk_size = 4000
     text = "\n".join(lines)
     for i in range(0, len(text), chunk_size):
         await message.answer(text[i:i+chunk_size])
 
-# --- ЗАПУСК ---
-async def main():
+# --- FLASK WEBHOOK SERVER ---
+app = Flask(__name__)
+
+@app.route(WEBHOOK_PATH, methods=["POST"])
+async def webhook_handler():
+    if request.content_type != "application/json":
+        abort(400)
+    update = types.Update(**await request.json)
+    await dp.process_update(update)
+    return "OK"
+
+async def on_startup():
     init_db()
-    keep_alive()
-    print("Бот запущен...")
-    await dp.start_polling(bot)
+    await bot.set_webhook(WEBHOOK_URL + WEBHOOK_PATH)
+    logging.info("Webhook set to %s", WEBHOOK_URL + WEBHOOK_PATH)
+
+async def on_shutdown():
+    await bot.delete_webhook()
+    await bot.session.close()
 
 if __name__ == "__main__":
+    import nest_asyncio
+    import uvicorn
+    nest_asyncio.apply()
+    import asyncio
+
+    async def main():
+        await on_startup()
+        # Запускаем Flask с uvicorn (ASGI)
+        config = uvicorn.Config(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), log_level="info")
+        server = uvicorn.Server(config)
+        await server.serve()
+
     asyncio.run(main())
