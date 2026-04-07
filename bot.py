@@ -1,16 +1,18 @@
 import os
 import logging
 import sqlite3
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta
+from threading import Thread
+
+from flask import Flask, request, abort
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.client.session.aiohttp import AiohttpSession
-from flask import Flask, request, abort
 
-# --- НАСТРОЙКИ ---
+# --- CONFIGURATION ---
 TOKEN = os.getenv("TOKEN", "8527322806:AAE570ZADxH89_9bDyNWO2JZ9WqEYJvjvJQ")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "-1003581309063"))
 ADMIN_ID = int(os.getenv("ADMIN_ID", "942900279"))
@@ -18,16 +20,18 @@ CARD_DETAILS = os.getenv("CARD_DETAILS", "2204120115044840")
 PAYPAL_DETAILS = os.getenv("PAYPAL_DETAILS", "neo832002@yahoo.com")
 PRICE_RUB = os.getenv("PRICE_RUB", "300 рублей")
 PRICE_USD = os.getenv("PRICE_USD", "4$")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://donat3d.onrender.com")  # Your public URL
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
-WEBHOOK_URL = "https://donat3d.onrender.com"  # Ваш публичный адрес
 FULL_WEBHOOK_URL = WEBHOOK_URL + WEBHOOK_PATH
 
-# --- ИНИЦИАЛИЗАЦИЯ ---
+# --- LOGGING ---
 logging.basicConfig(level=logging.INFO)
+
+# --- BOT AND DISPATCHER ---
 bot = Bot(token=TOKEN, session=AiohttpSession())
 dp = Dispatcher()
 
-# --- БАЗА ДАННЫХ ---
+# --- DATABASE ---
 def init_db():
     conn = sqlite3.connect("subscriptions.db")
     cur = conn.cursor()
@@ -45,11 +49,26 @@ def init_db():
 def add_subscription(user_id, days=30, username=None, country=None):
     conn = sqlite3.connect("subscriptions.db")
     cur = conn.cursor()
-    expire_date = datetime.now() + timedelta(days=days)
+    # Get current expire_date if exists and not expired
+    cur.execute("SELECT expire_date FROM subs WHERE user_id = ?", (user_id,))
+    res = cur.fetchone()
+    now = datetime.now()
+    if res:
+        try:
+            expire_date = datetime.strptime(res[0], "%Y-%m-%d %H:%M:%S")
+            if expire_date > now:
+                new_expire = expire_date + timedelta(days=days)
+            else:
+                new_expire = now + timedelta(days=days)
+        except Exception:
+            new_expire = now + timedelta(days=days)
+    else:
+        new_expire = now + timedelta(days=days)
+
     cur.execute("""
         INSERT OR REPLACE INTO subs (user_id, expire_date, username, country)
         VALUES (?, ?, ?, ?)
-    """, (user_id, expire_date.strftime("%Y-%m-%d %H:%M:%S"), username, country))
+    """, (user_id, new_expire.strftime("%Y-%m-%d %H:%M:%S"), username, country))
     conn.commit()
     conn.close()
 
@@ -60,9 +79,12 @@ def get_sub_info(user_id):
     res = cur.fetchone()
     conn.close()
     if res:
-        expire_date = datetime.strptime(res[0], "%Y-%m-%d %H:%M:%S")
-        if expire_date > datetime.now():
-            return expire_date
+        try:
+            expire_date = datetime.strptime(res[0], "%Y-%m-%d %H:%M:%S")
+            if expire_date > datetime.now():
+                return expire_date
+        except Exception:
+            return None
     return None
 
 def get_all_subscribers():
@@ -73,10 +95,27 @@ def get_all_subscribers():
     conn.close()
     return rows
 
+# --- FSM STATES ---
 class PaymentStates(StatesGroup):
     waiting = State()
 
-# --- ОБРАБОТЧИКИ ---
+# --- FLASK APP ---
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+@app.route(WEBHOOK_PATH, methods=["POST"])
+async def webhook_handler():
+    if request.content_type != "application/json":
+        abort(400)
+    data = await request.get_data()
+    update = types.Update.de_json(data)
+    await dp.process_update(update)
+    return "OK"
+
+# --- HANDLERS ---
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message, state: FSMContext):
@@ -85,9 +124,9 @@ async def cmd_start(message: types.Message, state: FSMContext):
     expire = get_sub_info(uid)
 
     username = message.from_user.username or "no_username"
-    country = "unknown"  # Telegram API не даёт страну напрямую
+    country = "unknown"  # Telegram API does not provide country info
 
-    # Обновляем данные пользователя (не меняем дату окончания, если подписка есть)
+    # Update user info in DB without changing expire date if active
     add_subscription(uid, days=0, username=username, country=country)
 
     if expire:
@@ -101,7 +140,10 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "pay")
 async def pay_info(call: types.CallbackQuery, state: FSMContext):
-    await call.message.answer(f"💰 **Реквизиты:**\nCard: `{CARD_DETAILS}`\nPayPal: `{PAYPAL_DETAILS}`\n\nПришлите скриншот чека!", parse_mode="Markdown")
+    await call.message.answer(
+        f"💰 **Реквизиты:**\nCard: `{CARD_DETAILS}`\nPayPal: `{PAYPAL_DETAILS}`\n\nПришлите скриншот чека!",
+        parse_mode="Markdown"
+    )
     await state.set_state(PaymentStates.waiting)
     await call.answer()
 
@@ -109,9 +151,12 @@ async def pay_info(call: types.CallbackQuery, state: FSMContext):
 async def handle_screenshot(message: types.Message, state: FSMContext):
     kb = InlineKeyboardBuilder()
     kb.row(types.InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"conf_{message.from_user.id}"))
-    await bot.send_photo(ADMIN_ID, message.photo[-1].file_id,
-                         caption=f"Новая оплата от {message.from_user.id}",
-                         reply_markup=kb.as_markup())
+    await bot.send_photo(
+        ADMIN_ID,
+        message.photo[-1].file_id,
+        caption=f"Новая оплата от {message.from_user.id}",
+        reply_markup=kb.as_markup()
+    )
     await message.answer("Ожидайте, админ проверяет оплату...")
     await state.clear()
 
@@ -160,37 +205,30 @@ async def cmd_stat(message: types.Message):
     for i in range(0, len(text), chunk_size):
         await message.answer(text[i:i+chunk_size])
 
-# --- FLASK WEBHOOK SERVER ---
-from flask import Flask, request, abort
-import asyncio
-import nest_asyncio
-import uvicorn
-
-app = Flask(__name__)
-
-@app.route(WEBHOOK_PATH, methods=["POST"])
-async def webhook_handler():
-    if request.content_type != "application/json":
-        abort(400)
-    data = await request.get_data()
-    update = types.Update.de_json(data)
-    await dp.process_update(update)
-    return "OK"
+# --- STARTUP AND SHUTDOWN ---
 
 async def on_startup():
     init_db()
     await bot.set_webhook(FULL_WEBHOOK_URL)
-    logging.info("Webhook set to %s", FULL_WEBHOOK_URL)
+    logging.info(f"Webhook set to {FULL_WEBHOOK_URL}")
 
 async def on_shutdown():
     await bot.delete_webhook()
     await bot.session.close()
 
+# --- RUN APP ---
+
 if __name__ == "__main__":
+    import nest_asyncio
+    import uvicorn
     nest_asyncio.apply()
+
     async def main():
         await on_startup()
         config = uvicorn.Config(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), log_level="info")
         server = uvicorn.Server(config)
         await server.serve()
+
+    import asyncio
     asyncio.run(main())
+
