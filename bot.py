@@ -198,4 +198,192 @@ async def send_pay(callback: types.CallbackQuery):
     await callback.answer()
 
 
-@dp.callback_query(F.data == "check_sub
+@dp.callback_query(F.data == "check_sub")
+async def check_sub(callback: types.CallbackQuery):
+    active = await is_sub_active(callback.from_user.id)
+    if not active:
+        await callback.message.answer("Подписка не активна или отсутствует. Оплати и пришли чек.")
+    else:
+        row = await get_sub(callback.from_user.id)
+        exp = _str_to_dt(row[3]).astimezone(CFG.tz)
+        await callback.message.answer(f"✅ Подписка активна до: <code>{_dt_to_str(exp)}</code>")
+    await callback.answer()
+
+
+@dp.message(F.photo)
+async def handle_photo(message: types.Message):
+    nick = f"@{message.from_user.username}" if message.from_user.username else "нет"
+    caption = (
+        f"Чек от: {message.from_user.full_name}\n"
+        f"Ник: {nick}\n"
+        f"ID: {message.from_user.id}\n"
+        f"Дата: {_dt_to_str(_now())}"
+    )
+    try:
+        await bot.send_photo(
+            CFG.admin_id,
+            message.photo[-1].file_id,
+            caption=caption,
+            reply_markup=admin_decision_kb(message.from_user.id),
+        )
+        await message.answer("⏳ Чек передан админу. Ожидай подтверждения.")
+    except TelegramAPIError as e:
+        log.exception("Failed to send photo to admin: %s", e)
+        await message.answer("Не удалось отправить чек админу. Попробуй позже.")
+
+
+@dp.callback_query(F.data.startswith(("ok_", "no_")))
+async def admin_decision(callback: types.CallbackQuery):
+    if callback.from_user.id != CFG.admin_id:
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    parts = callback.data.split("_", maxsplit=1)
+    action = parts[0]
+    try:
+        uid = int(parts[1])
+    except Exception:
+        await callback.answer("Некорректные данные.", show_alert=True)
+        return
+
+    caption = (callback.message.caption or "")
+    name = ""
+    nick = ""
+    for line in caption.splitlines():
+        if line.startswith("Чек от: "):
+            name = line.replace("Чек от: ", "").strip()
+        if line.startswith("Ник: "):
+            nick = line.replace("Ник: ", "").strip()
+
+    if action == "ok":
+        try:
+            invite = await bot.create_chat_invite_link(
+                CFG.channel_id,
+                creates_join_request=True,
+                name=f"sub-{uid}-{int(_now().timestamp())}",
+            )
+        except TelegramAPIError as e:
+            log.exception("Failed to create invite link: %s", e)
+            await callback.answer("Не удалось создать ссылку. Проверь права бота.", show_alert=True)
+            return
+
+        expire = await upsert_sub(uid, nick, name)
+
+        try:
+            await bot.send_message(
+                uid,
+                "✅ Оплата подтверждена!\n"
+                f"Подай заявку по ссылке:\n{invite.invite_link}\n\n"
+                "Бот одобрит её автоматически.\n"
+                f"Подписка активна до: <code>{_dt_to_str(expire)}</code>",
+            )
+        except TelegramAPIError as e:
+            log.exception("Failed to notify user %s: %s", uid, e)
+
+        try:
+            await callback.message.edit_caption(caption=caption + "\n\n✅ ОДОБРЕНО")
+        except TelegramAPIError:
+            pass
+
+        await callback.answer("Одобрено.")
+        return
+
+    try:
+        await bot.send_message(uid, "❌ Оплата отклонена. Если это ошибка — отправь чек повторно или напиши админу.")
+    except TelegramAPIError as e:
+        log.exception("Failed to notify user %s: %s", uid, e)
+
+    try:
+        await callback.message.edit_caption(caption=caption + "\n\n❌ ОТКЛОНЕНО")
+    except TelegramAPIError:
+        pass
+
+    await callback.answer("Отклонено.")
+
+
+@dp.chat_join_request()
+async def approve_request(update: types.ChatJoinRequest):
+    try:
+        if await is_sub_active(update.from_user.id):
+            await update.approve()
+        else:
+            await update.decline()
+    except TelegramAPIError as e:
+        log.exception("Join request handling failed: %s", e)
+
+
+@dp.callback_query(F.data == "admin_stats")
+async def admin_stats(callback: types.CallbackQuery):
+    if callback.from_user.id != CFG.admin_id:
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+    counts = await stats_counts()
+    await callback.message.answer(
+        "📊 Статистика подписок:\n"
+        f"Всего записей: <b>{counts['total']}</b>\n"
+        f"Активные: <b>{counts['active']}</b>\n"
+        f"Просроченные: <b>{counts['expired']}</b>\n"
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "admin_cleanup")
+async def admin_cleanup(callback: types.CallbackQuery):
+    if callback.from_user.id != CFG.admin_id:
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+    deleted = await cleanup_expired()
+    await callback.message.answer(f"🧹 Удалено просроченных подписок: <b>{deleted}</b>")
+    await callback.answer()
+
+
+async def periodic_cleanup_task():
+    while True:
+        try:
+            deleted = await cleanup_expired()
+            if deleted:
+                log.info("Periodic cleanup removed %d expired subscriptions", deleted)
+        except Exception:
+            log.exception("Periodic cleanup error")
+        await asyncio.sleep(6 * 60 * 60)
+
+
+async def health_app():
+    app = web.Application()
+
+    async def health(_request):
+        return web.json_response({"ok": True, "service": "telegram-sub-bot", "time": _dt_to_str(_now())})
+
+    app.router.add_get("/", health)
+    app.router.add_get("/health", health)
+    return app
+
+
+async def run_health_server():
+    app = await health_app()
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, host="0.0.0.0", port=CFG.port)
+    await site.start()
+    log.info("Healthcheck server running on 0.0.0.0:%s", CFG.port)
+
+
+async def main():
+    await init_db()
+    asyncio.create_task(periodic_cleanup_task())
+
+    if CFG.enable_healthcheck:
+        await run_health_server()
+
+    log.info("Bot started (polling)...")
+    await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    import traceback
+    try:
+        asyncio.run(main())
+    except Exception as e:
+        print("Fatal error:", e)
+        traceback.print_exc()
+        raise
