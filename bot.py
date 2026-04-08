@@ -234,19 +234,25 @@ async def handle_photo(message: types.Message):
 
 @dp.callback_query(F.data.startswith(("ok_", "no_")))
 async def admin_decision(callback: types.CallbackQuery):
+    log.info(f"Admin {callback.from_user.id} pressed {callback.data}")
+
     if callback.from_user.id != CFG.admin_id:
         await callback.answer("Недостаточно прав.", show_alert=True)
         return
 
     parts = callback.data.split("_", maxsplit=1)
-    action = parts[0]
-    try:
-        uid = int(parts[1])
-    except Exception:
+    if len(parts) != 2:
         await callback.answer("Некорректные данные.", show_alert=True)
         return
 
-    caption = (callback.message.caption or "")
+    action, uid_str = parts
+    try:
+        uid = int(uid_str)
+    except ValueError:
+        await callback.answer("Некорректный ID пользователя.", show_alert=True)
+        return
+
+    caption = callback.message.caption or ""
     name = ""
     nick = ""
     for line in caption.splitlines():
@@ -263,8 +269,8 @@ async def admin_decision(callback: types.CallbackQuery):
                 name=f"sub-{uid}-{int(_now().timestamp())}",
             )
         except TelegramAPIError as e:
-            log.exception("Failed to create invite link: %s", e)
-            await callback.answer("Не удалось создать ссылку. Проверь права бота.", show_alert=True)
+            log.error(f"Failed to create invite link: {e}")
+            await callback.answer("Не удалось создать ссылку. Проверьте права бота.", show_alert=True)
             return
 
         expire = await upsert_sub(uid, nick, name)
@@ -278,27 +284,32 @@ async def admin_decision(callback: types.CallbackQuery):
                 f"Подписка активна до: <code>{_dt_to_str(expire)}</code>",
             )
         except TelegramAPIError as e:
-            log.exception("Failed to notify user %s: %s", uid, e)
+            log.error(f"Failed to notify user {uid}: {e}")
 
         try:
             await callback.message.edit_caption(caption=caption + "\n\n✅ ОДОБРЕНО")
-        except TelegramAPIError:
-            pass
+        except TelegramAPIError as e:
+            log.warning(f"Failed to edit caption: {e}")
 
         await callback.answer("Одобрено.")
         return
 
-    try:
-        await bot.send_message(uid, "❌ Оплата отклонена. Если это ошибка — отправь чек повторно или напиши админу.")
-    except TelegramAPIError as e:
-        log.exception("Failed to notify user %s: %s", uid, e)
+    elif action == "no":
+        try:
+            await bot.send_message(uid, "❌ Оплата отклонена. Если это ошибка — отправь чек повторно или напиши админу.")
+        except TelegramAPIError as e:
+            log.error(f"Failed to notify user {uid}: {e}")
 
-    try:
-        await callback.message.edit_caption(caption=caption + "\n\n❌ ОТКЛОНЕНО")
-    except TelegramAPIError:
-        pass
+        try:
+            await callback.message.edit_caption(caption=caption + "\n\n❌ ОТКЛОНЕНО")
+        except TelegramAPIError as e:
+            log.warning(f"Failed to edit caption: {e}")
 
-    await callback.answer("Отклонено.")
+        await callback.answer("Отклонено.")
+        return
+
+    else:
+        await callback.answer("Неизвестное действие.", show_alert=True)
 
 
 @dp.chat_join_request()
