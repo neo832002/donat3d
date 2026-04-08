@@ -312,6 +312,83 @@ async def admin_decision(callback: types.CallbackQuery):
         await callback.answer("Неизвестное действие.", show_alert=True)
 
 
+@dp.callback_query(F.data == "admin_stats")
+async def admin_stats(callback: types.CallbackQuery):
+    if callback.from_user.id != CFG.admin_id:
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    now = _now()
+    async with aiosqlite.connect(CFG.db_path) as db:
+        cur = await db.execute("SELECT user_id, username, full_name, expire_date FROM subs")
+        rows = await cur.fetchall()
+        await cur.close()
+
+    # Фильтруем активных подписчиков
+    active_subs = []
+    for user_id, username, full_name, expire_date_str in rows:
+        try:
+            expire_date = _str_to_dt(expire_date_str)
+            if expire_date > now:
+                active_subs.append((user_id, username, full_name, expire_date))
+        except Exception:
+            continue
+
+    if not active_subs:
+        await callback.message.answer("Нет активных подписчиков.")
+        await callback.answer()
+        return
+
+    # Формируем сообщения с кнопками для каждого подписчика
+    for user_id, username, full_name, expire_date in active_subs:
+        name_display = full_name if full_name else "(без имени)"
+        nick_display = f"@{username}" if username else "(без ника)"
+        expire_display = expire_date.astimezone(CFG.tz).strftime("%Y-%m-%d %H:%M:%S")
+
+        text = (
+            f"👤 <b>{name_display}</b>\n"
+            f"🔹 Ник: {nick_display}\n"
+            f"🆔 ID: <code>{user_id}</code>\n"
+            f"⏳ Подписка активна до: <code>{expire_display}</code>"
+        )
+
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="❌ Отменить подписку",
+                        callback_data=f"cancel_sub_{user_id}"
+                    )
+                ]
+            ]
+        )
+
+        await callback.message.answer(text, reply_markup=kb)
+
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("cancel_sub_"))
+async def cancel_subscription(callback: types.CallbackQuery):
+    if callback.from_user.id != CFG.admin_id:
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    user_id_str = callback.data.removeprefix("cancel_sub_")
+    try:
+        user_id = int(user_id_str)
+    except ValueError:
+        await callback.answer("Некорректный ID пользователя.", show_alert=True)
+        return
+
+    async with aiosqlite.connect(CFG.db_path) as db:
+        await db.execute("DELETE FROM subs WHERE user_id = ?", (user_id,))
+        await db.commit()
+
+    await callback.answer(f"Подписка пользователя {user_id} отменена.")
+    await callback.message.edit_text(f"Подписка пользователя {user_id} была отменена администратором.")
+
+
 @dp.chat_join_request()
 async def approve_request(update: types.ChatJoinRequest):
     try:
@@ -321,21 +398,6 @@ async def approve_request(update: types.ChatJoinRequest):
             await update.decline()
     except TelegramAPIError as e:
         log.exception("Join request handling failed: %s", e)
-
-
-@dp.callback_query(F.data == "admin_stats")
-async def admin_stats(callback: types.CallbackQuery):
-    if callback.from_user.id != CFG.admin_id:
-        await callback.answer("Недостаточно прав.", show_alert=True)
-        return
-    counts = await stats_counts()
-    await callback.message.answer(
-        "📊 Статистика подписок:\n"
-        f"Всего записей: <b>{counts['total']}</b>\n"
-        f"Активные: <b>{counts['active']}</b>\n"
-        f"Просроченные: <b>{counts['expired']}</b>\n"
-    )
-    await callback.answer()
 
 
 @dp.callback_query(F.data == "admin_cleanup")
