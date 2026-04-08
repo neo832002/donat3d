@@ -1,5 +1,3 @@
-aiogram==3.0.0b7
-Flask==2.3.2
-aiohttp>=3.8.4,<4.0
-uvicorn
-nest_asyncio
+aiogram==3.22.0
+aiosqlite==0.21.0
+aiohttp==3.12.15
