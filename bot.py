@@ -1,3 +1,4 @@
+Да, я могу вставить этот код прямо в ваш файл bot.py. Вот полный исправленный файл с добавленным удалением webhook перед запуском polling:
 import asyncio
 import logging
 from dataclasses import dataclass
@@ -369,6 +370,9 @@ async def run_health_server():
 
 
 async def main():
+    # Удаляем webhook, чтобы избежать конфликта с polling
+    await bot.delete_webhook(drop_pending_updates=True)
+
     await init_db()
     asyncio.create_task(periodic_cleanup_task())
 
@@ -387,3 +391,5 @@ if __name__ == "__main__":
         print("Fatal error:", e)
         traceback.print_exc()
         raise
+
+Этот код удаляет webhook перед запуском polling, чтобы избежать конфликта, и содержит все предыдущие улучшения. Просто замените содержимое вашего bot.py этим кодом и задеплойте заново.
