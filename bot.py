@@ -1,4 +1,3 @@
-import os
 import asyncio
 import logging
 from dataclasses import dataclass
@@ -10,66 +9,31 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramAPIError
 
+from bot import TOKEN, ADMIN_ID, CHANNEL_ID, DB_PATH, SUB_DAYS, PAY_RU, PAY_PAYPAL, ENABLE_HEALTHCHECK, PORT
+
 # Optional: tiny health server for Render (useful for monitoring)
-# If you don't need it, set ENABLE_HEALTHCHECK=0
 from aiohttp import web
 
 
 # ---------------------- CONFIG ----------------------
 @dataclass(frozen=True)
 class Config:
-    token: str
-    admin_id: int
-    channel_id: int
-    db_path: str
-    sub_days: int
-    pay_ru: str
-    pay_paypal: str
-    tz: timezone
-    enable_healthcheck: bool
-    port: int
+    token: str = TOKEN
+    admin_id: int = ADMIN_ID
+    channel_id: int = CHANNEL_ID
+    db_path: str = DB_PATH
+    sub_days: int = SUB_DAYS
+    pay_ru: str = PAY_RU
+    pay_paypal: str = PAY_PAYPAL
+    tz: timezone = timezone.utc
+    enable_healthcheck: bool = ENABLE_HEALTHCHECK
+    port: int = PORT
 
 
-def load_config() -> Config:
-    token = os.getenv("BOT_TOKEN", "").strip()
-    if not token:
-        raise RuntimeError("BOT_TOKEN is not set")
-
-    admin_id = int(os.getenv("ADMIN_ID", "0"))
-    channel_id = int(os.getenv("CHANNEL_ID", "0"))
-    if admin_id == 0 or channel_id == 0:
-        raise RuntimeError("ADMIN_ID and CHANNEL_ID must be set")
-
-    db_path = os.getenv("DB_PATH", "subscriptions.db").strip()
-    sub_days = int(os.getenv("SUB_DAYS", "30"))
-
-    pay_ru = os.getenv("PAY_RU", "2204120115044840")
-    pay_paypal = os.getenv("PAY_PAYPAL", "neo832002@yahoi.com")
-
-    # store times in UTC by default
-    tz = timezone.utc
-
-    enable_healthcheck = os.getenv("ENABLE_HEALTHCHECK", "1") not in ("0", "false", "False")
-    port = int(os.getenv("PORT", "10000"))  # Render typically provides PORT for web services
-
-    return Config(
-        token=token,
-        admin_id=admin_id,
-        channel_id=channel_id,
-        db_path=db_path,
-        sub_days=sub_days,
-        pay_ru=pay_ru,
-        pay_paypal=pay_paypal,
-        tz=tz,
-        enable_healthcheck=enable_healthcheck,
-        port=port,
-    )
-
-
-CFG = load_config()
+CFG = Config()
 
 logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
+    level="INFO",
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 log = logging.getLogger("sub-bot")
@@ -99,12 +63,10 @@ def _now() -> datetime:
 
 
 def _dt_to_str(dt: datetime) -> str:
-    # ISO format with timezone (safe parsing)
     return dt.isoformat()
 
 
 def _str_to_dt(s: str) -> datetime:
-    # datetime.fromisoformat supports timezone info if present
     return datetime.fromisoformat(s)
 
 
@@ -144,7 +106,6 @@ async def is_sub_active(user_id: int) -> bool:
 
 
 async def cleanup_expired() -> int:
-    """Delete expired subs. Returns number of deleted rows."""
     async with aiosqlite.connect(CFG.db_path) as db:
         cur = await db.execute("SELECT user_id, expire_date FROM subs")
         rows = await cur.fetchall()
@@ -157,7 +118,6 @@ async def cleanup_expired() -> int:
                 if _str_to_dt(expire_s) <= now:
                     expired_ids.append(user_id)
             except Exception:
-                # corrupted date => treat as expired
                 expired_ids.append(user_id)
 
         if not expired_ids:
@@ -175,8 +135,6 @@ async def stats_counts() -> dict:
         total = (await cur.fetchone())[0]
         await cur.close()
 
-        # Active count: fetch all and compare in python (ok for small/medium).
-        # For big scale use SQL datetime functions and normalized format.
         cur = await db.execute("SELECT expire_date FROM subs")
         rows = await cur.fetchall()
         await cur.close()
@@ -261,7 +219,6 @@ async def check_sub(callback: types.CallbackQuery):
 
 @dp.message(F.photo)
 async def handle_photo(message: types.Message):
-    """User sends payment screenshot -> forward to admin with inline decision buttons."""
     nick = f"@{message.from_user.username}" if message.from_user.username else "нет"
     caption = (
         f"Чек от: {message.from_user.full_name}\n"
@@ -284,7 +241,6 @@ async def handle_photo(message: types.Message):
 
 @dp.callback_query(F.data.startswith(("ok_", "no_")))
 async def admin_decision(callback: types.CallbackQuery):
-    """Admin approves/declines payment."""
     if callback.from_user.id != CFG.admin_id:
         await callback.answer("Недостаточно прав.", show_alert=True)
         return
@@ -297,9 +253,7 @@ async def admin_decision(callback: types.CallbackQuery):
         await callback.answer("Некорректные данные.", show_alert=True)
         return
 
-    # Try to parse caption reliably (do not depend too hard on line order)
     caption = (callback.message.caption or "")
-    # Fallback values
     name = ""
     nick = ""
     for line in caption.splitlines():
@@ -310,7 +264,6 @@ async def admin_decision(callback: types.CallbackQuery):
 
     if action == "ok":
         try:
-            # Create invite link with join request (most reliable for moderation flows)
             invite = await bot.create_chat_invite_link(
                 CFG.channel_id,
                 creates_join_request=True,
@@ -342,7 +295,6 @@ async def admin_decision(callback: types.CallbackQuery):
         await callback.answer("Одобрено.")
         return
 
-    # action == "no"
     try:
         await bot.send_message(uid, "❌ Оплата отклонена. Если это ошибка — отправь чек повторно или напиши админу.")
     except TelegramAPIError as e:
@@ -358,7 +310,6 @@ async def admin_decision(callback: types.CallbackQuery):
 
 @dp.chat_join_request()
 async def approve_request(update: types.ChatJoinRequest):
-    """Auto-approve join requests for users with active subscription."""
     try:
         if await is_sub_active(update.from_user.id):
             await update.approve()
@@ -393,7 +344,6 @@ async def admin_cleanup(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# ---------------------- BACKGROUND TASKS ----------------------
 async def periodic_cleanup_task():
     while True:
         try:
@@ -402,11 +352,9 @@ async def periodic_cleanup_task():
                 log.info("Periodic cleanup removed %d expired subscriptions", deleted)
         except Exception:
             log.exception("Periodic cleanup error")
-        # every 6 hours
         await asyncio.sleep(6 * 60 * 60)
 
 
-# ---------------------- HEALTHCHECK SERVER ----------------------
 async def health_app():
     app = web.Application()
 
@@ -427,14 +375,10 @@ async def run_health_server():
     log.info("Healthcheck server running on 0.0.0.0:%s", CFG.port)
 
 
-# ---------------------- MAIN ----------------------
 async def main():
     await init_db()
-
-    # Start background cleanup
     asyncio.create_task(periodic_cleanup_task())
 
-    # Optional health server (useful for Render web service)
     if CFG.enable_healthcheck:
         await run_health_server()
 
@@ -447,4 +391,5 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+
 
