@@ -37,9 +37,6 @@ bot = Bot(token=CFG.token)
 dp = Dispatcher()
 
 
-# --- Работа с базой (PostgreSQL через asyncpg) ---
-
-
 async def get_conn():
     return await asyncpg.connect(CFG.db_url)
 
@@ -93,9 +90,6 @@ async def is_sub_active(user_id: int) -> bool:
     return row["expire_date"] > datetime.now(CFG.tz)
 
 
-# --- Клавиатуры ---
-
-
 def admin_kb():
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -122,9 +116,6 @@ def admin_decision_kb(user_id: int):
             ]
         ]
     )
-
-
-# --- Хендлеры ---
 
 
 @dp.message(Command("start"))
@@ -285,9 +276,6 @@ async def cancel_subscription(callback: types.CallbackQuery):
     await callback.message.edit_text(f"Подписка пользователя {user_id} была отменена администратором.")
 
 
-# --- Healthcheck для Render ---
-
-
 async def handle_health(request):
     return web.Response(text="OK")
 
@@ -319,4 +307,5 @@ if __name__ == "__main__":
         print("Fatal error:", e)
         traceback.print_exc()
         raise
+
 
