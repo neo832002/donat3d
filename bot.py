@@ -35,7 +35,6 @@ bot = Bot(token=CFG.token)
 dp = Dispatcher()
 
 # --- Системные функции ---
-
 async def handle_render_healthcheck(request):
     return web.Response(text="Bot is alive")
 
@@ -92,7 +91,47 @@ async def cmd_start(message: types.Message):
     ])
     await message.answer("Привет! Оплати доступ и пришли чек.", reply_markup=kb)
 
-# Команда Статистика для админа
+@dp.callback_query(F.data == "pay")
+async def send_pay(callback: types.CallbackQuery):
+    await callback.message.answer(f"Реквизиты:\nРФ: {CFG.pay_ru}\nPayPal: {CFG.pay_paypal}")
+    await callback.answer()
+
+# ИСПРАВЛЕНО: Глубокая проверка подписки и восстановление ссылки
+@dp.callback_query(F.data == "check_sub")
+async def check_sub(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    user_data = await subs_collection.find_one({"user_id": user_id})
+    
+    # 1. Проверяем наличие и дату в базе
+    if not user_data or user_data["expire_date"].replace(tzinfo=timezone.utc) < datetime.now(CFG.tz):
+        await callback.message.answer("❌ Ваша подписка не активна или истекла.")
+        await callback.answer()
+        return
+
+    expire_str = user_data["expire_date"].strftime('%d.%m.%Y %H:%M')
+    
+    # 2. Проверяем, состоит ли пользователь в канале прямо сейчас
+    try:
+        member = await bot.get_chat_member(CFG.channel_id, user_id)
+        
+        if member.status in ["member", "administrator", "creator", "restricted"]:
+            # Пользователь уже в канале
+            await callback.message.answer(f"✅ Подписка активна!\nВы состоите в канале.\n⏳ Срок до: {expire_str}")
+        else:
+            # Подписка оплачена, но пользователя нет в канале (вышел или выгнали случайно)
+            inv = await bot.create_chat_invite_link(CFG.channel_id, member_limit=1)
+            text = (
+                f"⚠️ Подписка оплачена (до {expire_str}), но вас нет в канале.\n\n"
+                f"Вот ваша новая ссылка для вступления:\n{inv.invite_link}"
+            )
+            await callback.message.answer(text)
+            
+    except Exception as e:
+        log.error(f"Error checking chat member: {e}")
+        await callback.message.answer("Произошла ошибка при проверке участия в канале. Обратитесь к админу.")
+    
+    await callback.answer()
+
 @dp.message(Command("stats"))
 async def cmd_stats(message: types.Message):
     if message.from_user.id == CFG.admin_id:
@@ -114,44 +153,24 @@ async def show_stats(message: types.Message):
 
     await message.answer(f"📊 <b>Активных пользователей: {len(users)}</b>", parse_mode="HTML")
     for u in users:
-        # ИСПРАВЛЕНО: Правильная кнопка удаления
         kb = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="❌ Удалить из канала", callback_data=f"terminate_{u['user_id']}")
         ]])
         text = f"👤 {u['full_name']}\n🆔 <code>{u['user_id']}</code>\n⏳ До: {u['expire_date'].strftime('%d.%m.%Y %H:%M')}"
         await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
-# ИСПРАВЛЕНО: Хэндлер удаления пользователя
 @dp.callback_query(F.data.startswith("terminate_"))
 async def terminate_sub(callback: types.CallbackQuery):
     if callback.from_user.id != CFG.admin_id: return
-    
     user_id = int(callback.data.split("_")[1])
     try:
         await bot.ban_chat_member(CFG.channel_id, user_id)
         await bot.unban_chat_member(CFG.channel_id, user_id)
         await subs_collection.delete_one({"user_id": user_id})
-        
         await callback.message.edit_text(f"🗑 Пользователь {user_id} удален.")
         await bot.send_message(user_id, "🔴 Ваша подписка аннулирована администратором.")
     except Exception as e:
         await callback.answer(f"Ошибка: {e}")
-    await callback.answer()
-
-# --- Остальные хэндлеры ---
-
-@dp.callback_query(F.data == "pay")
-async def send_pay(callback: types.CallbackQuery):
-    await callback.message.answer(f"Реквизиты:\nРФ: {CFG.pay_ru}\nPayPal: {CFG.pay_paypal}")
-    await callback.answer()
-
-@dp.callback_query(F.data == "check_sub")
-async def check_sub(callback: types.CallbackQuery):
-    user = await subs_collection.find_one({"user_id": callback.from_user.id})
-    if not user or user["expire_date"].replace(tzinfo=timezone.utc) < datetime.now(CFG.tz):
-        await callback.message.answer("❌ Подписка не активна.")
-    else:
-        await callback.message.answer(f"✅ Активна до: {user['expire_date'].strftime('%d.%m.%Y')}")
     await callback.answer()
 
 @dp.message(F.photo)
@@ -163,7 +182,7 @@ async def handle_photo(message: types.Message):
     await bot.send_photo(CFG.admin_id, message.photo[-1].file_id, 
                          caption=f"Чек от: {message.from_user.full_name}\nID: {message.from_user.id}", 
                          reply_markup=kb)
-    await message.answer("⏳ Чек отправлен админу.")
+    await message.answer("⏳ Чек передан админу.")
 
 @dp.callback_query(F.data.startswith(("ok_", "no_")))
 async def admin_decision(callback: types.CallbackQuery):
