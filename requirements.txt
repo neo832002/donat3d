@@ -1,3 +1,4 @@
 aiogram
 motor
 dnspython
+aiohttp
