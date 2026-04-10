@@ -35,6 +35,11 @@ dp = Dispatcher()
 
 # --- Системные функции ---
 
+async def init_db():
+    """Инициализация индексов БД"""
+    await subs_collection.create_index("user_id", unique=True)
+    log.info("База данных готова.")
+
 async def set_bot_commands():
     try:
         await bot.set_my_commands([BotCommand(command="start", description="🏠 Start")], scope=BotCommandScopeDefault())
@@ -123,7 +128,8 @@ async def handle_photo(message: types.Message):
 @dp.callback_query(F.data.startswith(("ok_", "no_")))
 async def admin_decision(callback: types.CallbackQuery):
     if callback.from_user.id != CFG.admin_id: return
-    action, uid = callback.data.split("_"), int(callback.data.split("_"))
+    data = callback.data.split("_")
+    action, uid = data[0], int(data[1])
     if action == "ok":
         u_info = await bot.get_chat(uid)
         link = await bot.create_chat_invite_link(CFG.channel_id, member_limit=1)
@@ -136,29 +142,26 @@ async def admin_decision(callback: types.CallbackQuery):
 async def handle_hc(request): return web.Response(text="OK")
 
 async def main():
+    # 1. Сначала БД
     await init_db()
     
-    # --- АГРЕССИВНЫЙ СБРОС ---
-    log.info("Запуск цикла агрессивного сброса сессий...")
-    for i in range(3):
+    # 2. Агрессивный сброс сессий
+    for i in range(2):
         try:
             await bot.delete_webhook(drop_pending_updates=True)
-            log.info(f"Попытка сброса {i+1} успешна.")
-        except Exception as e:
-            log.warning(f"Попытка {i+1} не удалась: {e}")
-        await asyncio.sleep(3) # Пауза между попытками
+            await asyncio.sleep(2)
+        except: pass
 
     await set_bot_commands()
     
-    # Запуск Health Check сервера
+    # 3. Веб-сервер
     app = web.Application()
     app.router.add_get("/", handle_hc)
     runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", CFG.port).start()
-    log.info(f"Веб-сервер запущен на порту {CFG.port}")
 
     asyncio.create_task(check_expirations_test())
-    log.info("Бот готов к работе. Если Conflict сохраняется — подождите 30 секунд.")
+    log.info("Бот запущен. Тест на 1 минуту.")
     await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member"])
 
 if __name__ == "__main__":
