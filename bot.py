@@ -33,23 +33,27 @@ subs_collection = db.subs
 bot = Bot(token=CFG.token)
 dp = Dispatcher()
 
-# --- Настройка команд ---
+# --- Настройка подсказок (меню команд) ---
 
 async def set_bot_commands():
-    user_commands = [BotCommand(command="start", description="Главное меню / Main menu")]
+    # Подсказки для ОБЫЧНЫХ ПОЛЬЗОВАТЕЛЕЙ (видят при вводе "/")
+    user_commands = [
+        BotCommand(command="start", description="🏠 Главное меню и оплата / Main menu & Payment")
+    ]
     await bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
     
+    # Подсказки для АДМИНА
     admin_commands = [
-        BotCommand(command="start", description="Запустить бота / Start bot"),
-        BotCommand(command="stats", description="Статистика / Statistics")
+        BotCommand(command="start", description="🏠 Меню / Menu"),
+        BotCommand(command="stats", description="📊 Статистика и управление / Stats & Management")
     ]
     await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=CFG.admin_id))
+    log.info("Command hints registered")
 
 # --- Системные функции ---
 
 async def init_db():
     await subs_collection.create_index("user_id", unique=True)
-    log.info("DB Initialized")
 
 async def kick_user(user_id: int):
     try:
@@ -57,9 +61,7 @@ async def kick_user(user_id: int):
         await bot.unban_chat_member(CFG.channel_id, user_id)
         await subs_collection.delete_one({"user_id": user_id})
         return True
-    except Exception as e:
-        log.error(f"Error kicking {user_id}: {e}")
-        return False
+    except: return False
 
 async def check_expirations():
     while True:
@@ -81,7 +83,7 @@ async def check_expirations():
 async def cmd_start(message: types.Message):
     if message.from_user.id == CFG.admin_id:
         kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📊 Статистика / Stats", callback_data="admin_stats")]])
-        await message.answer("Панель администратора / Admin panel:", reply_markup=kb)
+        await message.answer("Панель администратора:", reply_markup=kb)
         return
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -89,10 +91,8 @@ async def cmd_start(message: types.Message):
         [InlineKeyboardButton(text="🔎 Проверить подписку / Check sub", callback_data="check_sub")]
     ])
     await message.answer(
-        "👋 Привет! Используйте кнопки ниже для оплаты доступа или проверки статуса.\n"
-        "После оплаты просто отправьте фото чека в этот чат.\n\n"
-        "👋 Hello! Use the buttons below to pay for access or check status.\n"
-        "After payment, just send a photo of the receipt to this chat.", 
+        "👋 Привет! Используйте кнопку ниже для оплаты или отправьте фото чека прямо сюда.\n\n"
+        "👋 Hello! Use the button below to pay or send the receipt photo right here.", 
         reply_markup=kb
     )
 
@@ -115,16 +115,15 @@ async def show_statistics():
     users = await cursor.to_list(length=None)
     if not users:
         kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Закрыть / Close", callback_data="close_stats")]])
-        await bot.send_message(CFG.admin_id, "База пуста / DB is empty.", reply_markup=kb)
+        await bot.send_message(CFG.admin_id, "База пуста.", reply_markup=kb)
         return
 
-    await bot.send_message(CFG.admin_id, f"📊 Всего пользователей / Total: {len(users)}")
+    await bot.send_message(CFG.admin_id, f"📊 Всего: {len(users)}")
     for u in users:
-        username = f"@{u['username']}" if u.get('username') else "none"
         date_str = u['expire_date'].strftime('%d.%m.%Y')
-        text = f"👤 {u.get('full_name')}\n🔗 {username} | ID: `{u['user_id']}`\n📅 До: {date_str}"
+        text = f"👤 {u.get('full_name')}\n🆔 `{u['user_id']}`\n📅 До: {date_str}"
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отменить / Terminate", callback_data=f"terminate_{u['user_id']}")],
+            [InlineKeyboardButton(text="❌ Удалить / Kick", callback_data=f"terminate_{u['user_id']}")],
             [InlineKeyboardButton(text="🗑 Скрыть / Hide", callback_data="close_stats")]
         ])
         await bot.send_message(CFG.admin_id, text, reply_markup=kb, parse_mode="Markdown")
@@ -140,7 +139,7 @@ async def terminate_sub(callback: types.CallbackQuery):
     if callback.from_user.id != CFG.admin_id: return
     uid = int(callback.data.split("_")[1])
     if await kick_user(uid):
-        await callback.message.edit_text(callback.message.text + "\n\n✅ TERMINATED")
+        await callback.message.edit_text(callback.message.text + "\n\n✅ УДАЛЕН")
     await callback.answer()
 
 @dp.message(F.photo)
@@ -152,7 +151,7 @@ async def handle_photo(message: types.Message):
     await bot.send_photo(CFG.admin_id, message.photo[-1].file_id, 
                          caption=f"Чек от: {message.from_user.full_name}\nID: `{message.from_user.id}`", 
                          reply_markup=kb, parse_mode="Markdown")
-    await message.answer("⏳ Чек отправлен на проверку. / Receipt sent for verification.")
+    await message.answer("⏳ Чек отправлен. / Receipt sent.")
 
 @dp.callback_query(F.data.startswith(("ok_", "no_")))
 async def admin_decision(callback: types.CallbackQuery):
@@ -164,15 +163,13 @@ async def admin_decision(callback: types.CallbackQuery):
         expire = datetime.now() + timedelta(days=CFG.sub_days)
         await subs_collection.update_one({"user_id": uid}, {"$set": {"username": u_info.username or "", "full_name": u_info.full_name or "", "expire_date": expire}}, upsert=True)
         link = await bot.create_chat_invite_link(chat_id=CFG.channel_id, member_limit=1)
-        await bot.send_message(uid, f"✅ Оплата принята! До: {expire.strftime('%d.%m.%Y')}\nOne-time link: {link.invite_link}")
-        await callback.answer("Одобрено / Approved")
+        await bot.send_message(uid, f"✅ Одобрено! До: {expire.strftime('%d.%m.%Y')}\nLink: {link.invite_link}")
     else:
         await bot.send_message(uid, "❌ Отклонено. / Declined.")
-        await callback.answer("Отклонено / Declined")
     
-    # Удаляем сообщение с чеком у админа после решения
     try: await callback.message.delete()
     except: pass
+    await callback.answer()
 
 async def main():
     await init_db()
