@@ -40,19 +40,17 @@ async def init_db():
     log.info("DB Initialized")
 
 async def get_one_time_link():
-    """Создает ссылку, которая аннулируется после 1 вступления"""
     link = await bot.create_chat_invite_link(
         chat_id=CFG.channel_id,
         member_limit=1,
-        name=f"Sub_Entry_{datetime.now().strftime('%H%M%S')}"
+        name=f"Sub_{datetime.now().strftime('%H%M%S')}"
     )
     return link.invite_link
 
 async def kick_user(user_id: int):
-    """Удаляет из канала и чистит бан-лист для возможности вернуться"""
     try:
         await bot.ban_chat_member(CFG.channel_id, user_id)
-        await bot.unban_chat_member(CFG.channel_id, user_id) # Снимаем бан сразу, чтобы мог зайти потом
+        await bot.unban_chat_member(CFG.channel_id, user_id)
         await subs_collection.delete_one({"user_id": user_id})
         return True
     except Exception as e:
@@ -70,13 +68,14 @@ async def check_expirations():
         
         await asyncio.sleep((target - now).total_seconds())
 
-        log.info("Daily Cleanup Started")
         cursor = subs_collection.find({"expire_date": {"$lt": datetime.now()}})
         async for u in cursor:
             uid = u["user_id"]
             if await kick_user(uid):
                 try:
-                    await bot.send_message(uid, "🔴 Ваша подписка истекла. Оплатите снова для доступа.")
+                    await bot.send_message(uid, 
+                        "🔴 Ваша подписка истекла. Оплатите снова для доступа.\n"
+                        "🔴 Your subscription has expired. Please pay again for access.")
                 except: pass
 
 # --- Обработчики ---
@@ -84,19 +83,55 @@ async def check_expirations():
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     if message.from_user.id == CFG.admin_id:
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")]])
-        await message.answer("Админ-панель:", reply_markup=kb)
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📊 Статистика / Stats", callback_data="admin_stats")]])
+        await message.answer("Админ-панель / Admin Panel:", reply_markup=kb)
         return
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Реквизиты", callback_data="pay")],
-        [InlineKeyboardButton(text="🔎 Проверить подписку", callback_data="check_sub")]
+        [InlineKeyboardButton(text="💳 Реквизиты / Payment info", callback_data="pay")],
+        [InlineKeyboardButton(text="🔎 Проверить подписку / Check sub", callback_data="check_sub")]
     ])
-    await message.answer("Привет! Для доступа в приватный канал оплатите подписку и отправьте скриншот чека в этот чат.", reply_markup=kb)
+    await message.answer(
+        "Привет! Для доступа в приватный канал оплатите подписку и отправьте скриншот чека.\n\n"
+        "Hello! To access the private channel, pay for the subscription and send a screenshot of the receipt.", 
+        reply_markup=kb
+    )
 
 @dp.callback_query(F.data == "pay")
 async def send_pay(callback: types.CallbackQuery):
-    await callback.message.answer(f"Реквизиты для оплаты:\n\n💳 РФ: `{CFG.pay_ru}`\n🅿️ PayPal: `{CFG.pay_paypal}`\n\nПосле оплаты пришлите фото чека.", parse_mode="Markdown")
+    await callback.message.answer(
+        f"Реквизиты для оплаты / Payment details:\n\n"
+        f"💳 РФ: `{CFG.pay_ru}`\n"
+        f"🅿️ PayPal: `{CFG.pay_paypal}`\n\n"
+        f"После оплаты пришлите фото чека.\n"
+        f"After payment, please send a photo of the receipt.", 
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data == "check_sub")
+async def check_sub(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    user_data = await subs_collection.find_one({"user_id": user_id})
+    
+    if not user_data or user_data["expire_date"] < datetime.now():
+        await callback.message.answer("❌ Ваша подписка не активна.\n❌ Your subscription is not active.")
+    else:
+        expire_str = user_data["expire_date"].strftime('%d.%m.%Y')
+        try:
+            member = await bot.get_chat_member(CFG.channel_id, user_id)
+            if member.status in ["member", "administrator", "creator", "restricted"]:
+                await callback.message.answer(
+                    f"✅ Подписка активна до: {expire_str}\n"
+                    f"✅ Subscription is active until: {expire_str}")
+            else:
+                link = await get_one_time_link()
+                await callback.message.answer(
+                    f"⚠️ Подписка есть (до {expire_str}), но вы не в канале.\n"
+                    f"⚠️ You have a sub (until {expire_str}), but you're not in the channel.\n\n"
+                    f"Link: {link}")
+        except:
+            await callback.message.answer("Ошибка доступа / Access error.")
     await callback.answer()
 
 @dp.callback_query(F.data == "admin_stats")
@@ -105,20 +140,18 @@ async def cb_stats(callback: types.CallbackQuery):
     users = await cursor.to_list(length=None)
     
     if not users:
-        await callback.message.answer("База данных пуста.")
+        await callback.message.answer("База пуста / DB is empty.")
     else:
-        await callback.message.answer(f"📊 Всего записей в базе: {len(users)}")
+        await callback.message.answer(f"📊 Всего / Total: {len(users)}")
         for u in users:
-            username = f"@{u['username']}" if u.get('username') else "нет"
-            # Формат: Имя, Логин, ID, Дата
+            username = f"@{u['username']}" if u.get('username') else "none"
             date_str = u['expire_date'].strftime('%d.%m.%Y')
-            text = (f"👤 **Имя:** {u.get('full_name')}\n"
-                    f"🔗 **Логин:** {username}\n"
-                    f"🆔 **ID:** `{u['user_id']}`\n"
-                    f"📅 **До:** {date_str}")
+            text = (f"👤 {u.get('full_name')}\n"
+                    f"🔗 {username} | ID: `{u['user_id']}`\n"
+                    f"📅 До / Until: {date_str}")
             
             kb = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="❌ Отменить подписку", callback_data=f"terminate_{u['user_id']}")
+                InlineKeyboardButton(text="❌ Отменить / Terminate", callback_data=f"terminate_{u['user_id']}")
             ]])
             await callback.message.answer(text, reply_markup=kb, parse_mode="Markdown")
     await callback.answer()
@@ -129,11 +162,12 @@ async def terminate_sub(callback: types.CallbackQuery):
     uid = int(callback.data.split("_")[1])
     
     if await kick_user(uid):
-        await callback.message.edit_text(callback.message.text + "\n\n✅ **ПОДПИСКА АННУЛИРОВАНА**", parse_mode="Markdown")
-        try: await bot.send_message(uid, "🔴 Ваша подписка была аннулирована администратором.")
+        await callback.message.edit_text(callback.message.text + "\n\n✅ TERMINATED")
+        try: 
+            await bot.send_message(uid, 
+                "🔴 Ваша подписка была аннулирована администратором.\n"
+                "🔴 Your subscription has been cancelled by the administrator.")
         except: pass
-    else:
-        await callback.answer("Ошибка при удалении")
     await callback.answer()
 
 @dp.message(F.photo)
@@ -145,44 +179,41 @@ async def handle_photo(message: types.Message):
     await bot.send_photo(
         CFG.admin_id, 
         message.photo[-1].file_id, 
-        caption=f"Чек от: {message.from_user.full_name}\nЛогин: @{message.from_user.username}\nID: `{message.from_user.id}`", 
+        caption=f"Чек от: {message.from_user.full_name}\nID: `{message.from_user.id}`", 
         reply_markup=kb,
         parse_mode="Markdown"
     )
-    await message.answer("⏳ Чек отправлен на проверку администратору.")
+    await message.answer(
+        "⏳ Чек отправлен на проверку администратору.\n"
+        "⏳ Receipt sent to the administrator for verification.")
 
 @dp.callback_query(F.data.startswith(("ok_", "no_")))
 async def admin_decision(callback: types.CallbackQuery):
     if callback.from_user.id != CFG.admin_id: return
-    action, uid = callback.data.split("_")[0], int(callback.data.split("_")[1])
+    parts = callback.data.split("_")
+    action, uid = parts[0], int(parts[1])
     
     if action == "ok":
-        try:
-            u_info = await bot.get_chat(uid)
-            # Сохраняем в базу
-            expire = datetime.now() + timedelta(days=CFG.sub_days)
-            await subs_collection.update_one(
-                {"user_id": uid},
-                {"$set": {
-                    "username": u_info.username or "", 
-                    "full_name": u_info.full_name or "", 
-                    "expire_date": expire
-                }},
-                upsert=True
-            )
-            # Генерируем одноразовую ссылку
-            link = await get_one_time_link()
-            await bot.send_message(uid, f"✅ Оплата принята!\n\nВаша одноразовая ссылка для вступления:\n{link}\n\nПодписка активна до: {expire.strftime('%d.%m.%Y')}")
-            await callback.message.edit_caption(caption=callback.message.caption + "\n\n✅ ОДОБРЕНО")
-        except Exception as e:
-            await callback.answer(f"Ошибка: {e}")
+        u_info = await bot.get_chat(uid)
+        expire = datetime.now() + timedelta(days=CFG.sub_days)
+        await subs_collection.update_one(
+            {"user_id": uid},
+            {"$set": {"username": u_info.username or "", "full_name": u_info.full_name or "", "expire_date": expire}},
+            upsert=True
+        )
+        link = await get_one_time_link()
+        await bot.send_message(uid, 
+            f"✅ Оплата принята! До: {expire.strftime('%d.%m.%Y')}\n"
+            f"✅ Payment accepted! Until: {expire.strftime('%d.%m.%Y')}\n\n"
+            f"One-time link: {link}")
+        await callback.message.edit_caption(caption=callback.message.caption + "\n\n✅ ОДОБРЕНО / APPROVED")
     else:
-        try: await bot.send_message(uid, "❌ Ваш чек был отклонен. Свяжитесь с администратором, если это ошибка.")
-        except: pass
-        await callback.message.edit_caption(caption=callback.message.caption + "\n\n❌ ОТКЛОНЕНО")
+        await bot.send_message(uid, 
+            "❌ Ваш чек был отклонен.\n"
+            "❌ Your receipt was declined.")
+        await callback.message.edit_caption(caption=callback.message.caption + "\n\n❌ ОТКЛОНЕНО / DECLINED")
     await callback.answer()
 
-# --- Веб-сервер для Healthcheck ---
 async def handle_hc(request): return web.Response(text="Bot is alive")
 
 async def main():
@@ -194,7 +225,6 @@ async def main():
     await web.TCPSite(runner, "0.0.0.0", CFG.port).start()
     
     asyncio.create_task(check_expirations())
-    log.info("Bot Started")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
