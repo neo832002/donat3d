@@ -13,7 +13,8 @@ from aiohttp import web
 
 @dataclass(frozen=True)
 class Config:
-    token: str = "8527322806:AAE570ZADxH89_9bDyNWO2JZ9WqEYJvjvJQ"
+    # Твой НОВЫЙ токен вставлен сюда
+    token: str = "8527322806:AAFwNdIeXi2mdbIB7duY3rWoyHXxhL7Q9Pg" 
     admin_id: int = 942900279
     channel_id: int = -1003581309063
     db_url: str = os.getenv("MONGODB_URI")
@@ -39,7 +40,7 @@ async def init_db():
     await subs_collection.create_index("user_id", unique=True)
 
 async def set_bot_commands():
-    await bot.set_my_commands([BotCommand(command="start", description="🏠 Главное меню / Main Menu")], scope=BotCommandScopeDefault())
+    await bot.set_my_commands([BotCommand(command="start", description="🏠 Меню / Main Menu")], scope=BotCommandScopeDefault())
     await bot.set_my_commands([
         BotCommand(command="start", description="🏠 Меню / Menu"),
         BotCommand(command="stats", description="📊 Статистика / Stats")
@@ -118,8 +119,6 @@ async def check_sub(callback: types.CallbackQuery):
         await callback.message.answer("❌ Подписка не найдена.\n❌ Subscription not found.")
     elif u["status"] == "pending":
         await callback.message.answer("⏳ Ожидание вступления в канал.\n⏳ Waiting for you to join the channel.")
-    elif u["expire_date"] < datetime.now():
-        await callback.message.answer("❌ Срок истек.\n❌ Expired.")
     else:
         await callback.message.answer(f"✅ Активна до / Active until: {u['expire_date'].strftime('%H:%M:%S')}")
     await callback.answer()
@@ -134,7 +133,7 @@ async def cb_stats(callback: types.CallbackQuery):
         await callback.message.answer("База пуста / DB is empty.")
     else:
         for u in users:
-            st = "⏳ Ожидает входа" if u.get("status") == "pending" else f"✅ До: {u['expire_date'].strftime('%H:%M:%S')}"
+            st = "⏳ Ждет входа" if u.get("status") == "pending" else f"✅ До: {u['expire_date'].strftime('%H:%M:%S')}"
             kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Удалить / Kick", callback_data=f"terminate_{u['user_id']}") ]])
             await callback.message.answer(f"👤 {u.get('full_name')}\nID: `{u['user_id']}`\n{st}", reply_markup=kb)
     await callback.answer()
@@ -172,7 +171,7 @@ async def admin_decision(callback: types.CallbackQuery):
                 "full_name": u_info.full_name or "User", 
                 "status": "pending",
                 "invite_link": link.invite_link,
-                "expire_date": datetime.now() + timedelta(days=365) # Заглушка
+                "expire_date": datetime.now() + timedelta(days=365)
             }}, upsert=True
         )
         await bot.send_message(uid, f"✅ Оплата принята! Срок пойдет после входа:\n{link.invite_link}")
@@ -187,15 +186,8 @@ async def handle_hc(request): return web.Response(text="OK")
 
 async def main():
     await init_db()
-    
-    # Агрессивный сброс для удаления Conflict
-    log.info("Очистка сессий...")
-    for _ in range(2):
-        try:
-            await bot.delete_webhook(drop_pending_updates=True)
-            await asyncio.sleep(2)
-        except: pass
-
+    # Удаляем вебхук при каждом запуске для нового токена
+    await bot.delete_webhook(drop_pending_updates=True)
     await set_bot_commands()
     
     app = web.Application()
@@ -204,7 +196,7 @@ async def main():
     await web.TCPSite(runner, "0.0.0.0", CFG.port).start()
 
     asyncio.create_task(check_expirations_test())
-    log.info("Бот запущен. Тест: 1 минута.")
+    log.info("Polling started with NEW token.")
     await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member"])
 
 if __name__ == "__main__":
