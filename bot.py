@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 from motor.motor_asyncio import AsyncIOMotorClient
 from aiogram import Bot, Dispatcher, F, types
+from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command, ChatMemberUpdatedFilter
 from aiogram.filters.chat_member_updated import JOIN_TRANSITION
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand, BotCommandScopeChat, BotCommandScopeDefault, ChatMemberUpdated
@@ -19,6 +20,7 @@ class Config:
     db_url: str = os.getenv("MONGODB_URI")
     sub_duration_test: timedelta = timedelta(minutes=1) 
     check_interval: int = 20
+    # ВОССТАНОВЛЕННЫЕ РЕКВИЗИТЫ:
     pay_ru: str = "2204120115044840"
     pay_paypal: str = "neo832002@yahoo.com"
     port: int = int(os.getenv("PORT", 10000))
@@ -41,11 +43,13 @@ async def init_db():
     await subs_collection.create_index("user_id", unique=True)
 
 async def set_bot_commands():
-    await bot.set_my_commands([BotCommand(command="start", description="🏠 Меню / Main Menu")], scope=BotCommandScopeDefault())
-    await bot.set_my_commands([
-        BotCommand(command="start", description="🏠 Меню / Menu"),
-        BotCommand(command="stats", description="📊 Статистика / Stats")
-    ], scope=BotCommandScopeChat(chat_id=CFG.admin_id))
+    try:
+        await bot.set_my_commands([BotCommand(command="start", description="🏠 Меню / Main Menu")], scope=BotCommandScopeDefault())
+        await bot.set_my_commands([
+            BotCommand(command="start", description="🏠 Меню / Menu"),
+            BotCommand(command="stats", description="📊 Статистика / Stats")
+        ], scope=BotCommandScopeChat(chat_id=CFG.admin_id))
+    except: pass
 
 async def kick_user(user_id: int):
     try:
@@ -82,7 +86,7 @@ async def on_user_join(event: ChatMemberUpdated):
     if user_data:
         expire = datetime.now() + CFG.sub_duration_test
         await subs_collection.update_one({"user_id": user_id}, {"$set": {"status": "active", "expire_date": expire}})
-        try: await bot.send_message(user_id, f"✅ Подписка активирована на 1 минуту!\n✅ Subscription activated for 1 minute!")
+        try: await bot.send_message(user_id, "✅ Подписка активирована на 1 минуту!\n✅ Subscription activated for 1 minute!")
         except: pass
 
 # --- Обработчики Пользователя ---
@@ -106,7 +110,6 @@ async def cmd_start(message: types.Message):
 
 @dp.callback_query(F.data == "pay_info")
 async def send_pay(callback: types.CallbackQuery):
-    log.info(f"User {callback.from_user.id} requested payment info")
     await callback.message.answer(
         f"💳 РФ: `{CFG.pay_ru}`\n🅿️ PayPal: `{CFG.pay_paypal}`\n\n"
         f"Пришлите фото чека после оплаты.\nSend receipt photo after payment.", 
@@ -141,7 +144,7 @@ async def cb_stats(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("terminate_"))
 async def terminate_sub(callback: types.CallbackQuery):
-    uid = int(callback.data.split("_"))
+    uid = int(callback.data.split("_")[1])
     await kick_user(uid)
     await callback.message.edit_text("✅ Удален / Removed.")
     await callback.answer()
@@ -160,7 +163,8 @@ async def handle_photo(message: types.Message):
 @dp.callback_query(F.data.startswith(("ok_", "no_")))
 async def admin_decision(callback: types.CallbackQuery):
     if callback.from_user.id != CFG.admin_id: return
-    action, uid = callback.data.split("_"), int(callback.data.split("_"))
+    parts = callback.data.split("_")
+    action, uid = parts[0], int(parts[1])
     
     if action == "ok":
         u_info = await bot.get_chat(uid)
@@ -187,6 +191,7 @@ async def handle_hc(request): return web.Response(text="OK")
 
 async def main():
     await init_db()
+    # Удаляем вебхук при каждом запуске
     await bot.delete_webhook(drop_pending_updates=True)
     await set_bot_commands()
     
@@ -196,7 +201,7 @@ async def main():
     await web.TCPSite(runner, "0.0.0.0", CFG.port).start()
 
     asyncio.create_task(check_expirations_test())
-    log.info("Polling started with NEW token.")
+    log.info("Бот запущен.")
     await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member"])
 
 if __name__ == "__main__":
