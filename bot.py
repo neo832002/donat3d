@@ -44,13 +44,11 @@ async def init_db():
 
 async def set_bot_commands():
     try:
-        # Команды для пользователя
         await bot.set_my_commands([
             BotCommand(command="start", description="🏠 Меню / Menu"),
             BotCommand(command="stats", description="🔎 Проверить статус подписки / Check status")
         ], scope=BotCommandScopeDefault())
         
-        # Команды для админа
         await bot.set_my_commands([
             BotCommand(command="start", description="🏠 Панель управления"),
             BotCommand(command="stats", description="📊 Статистика всех подписчиков")
@@ -116,7 +114,7 @@ async def process_check_status(user_id: int, message_to_reply: types.Message):
     except:
         await message_to_reply.answer("❌ Ошибка проверки.\n❌ Error checking status.")
 
-# --- Обработчики Пользователя ---
+# --- Обработчики ---
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
@@ -151,7 +149,7 @@ async def cb_check_sub(callback: types.CallbackQuery):
     await process_check_status(callback.from_user.id, callback.message)
     await callback.answer()
 
-# --- Обработчики Админа ---
+# --- Логика Админа ---
 
 async def cb_stats(union: types.CallbackQuery | types.Message):
     cursor = subs_collection.find()
@@ -162,8 +160,9 @@ async def cb_stats(union: types.CallbackQuery | types.Message):
     else:
         for u in users:
             st = f"✅ До: {u['expire_date'].strftime('%d.%m.%Y')}" if "expire_date" in u else "⏳ Ожидает входа"
+            usr = f"@{u.get('username')}" if u.get('username') else "нет username"
             kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Исключить", callback_data=f"terminate_{u['user_id']}") ]])
-            await msg_obj.answer(f"👤 {u.get('full_name')}\nID: `{u['user_id']}`\n{st}", reply_markup=kb)
+            await msg_obj.answer(f"👤 {u.get('full_name')}\n🔗 Юзер: {usr}\n🆔 ID: `{u['user_id']}`\n📊 {st}", reply_markup=kb)
     if isinstance(union, types.CallbackQuery): await union.answer()
 
 @dp.callback_query(F.data == "admin_stats")
@@ -190,7 +189,7 @@ async def admin_decision(callback: types.CallbackQuery):
         await bot.send_message(uid, "❌ Отказано / Declined.")
     await callback.message.delete(); await callback.answer()
 
-# --- Логика вступления и фото ---
+# --- Вступление и Фото ---
 
 @dp.chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
 async def on_user_join(event: ChatMemberUpdated):
