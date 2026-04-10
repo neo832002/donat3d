@@ -142,7 +142,8 @@ async def cb_stats(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("terminate_"))
 async def terminate_sub(callback: types.CallbackQuery):
-    uid = int(callback.data.split("_")[1]) # ИСПРАВЛЕНО
+    # ИСПРАВЛЕНО: берем индекс [1] после split
+    uid = int(callback.data.split("_")[1])
     await kick_user(uid)
     await callback.message.edit_text("✅ Удален / Removed.")
     await callback.answer()
@@ -161,9 +162,11 @@ async def handle_photo(message: types.Message):
 @dp.callback_query(F.data.startswith(("ok_", "no_")))
 async def admin_decision(callback: types.CallbackQuery):
     if callback.from_user.id != CFG.admin_id: return
-    parts = callback.data.split("_")
-    action = parts[0]
-    uid = int(parts[1]) # ИСПРАВЛЕНО
+    
+    # ИСПРАВЛЕНО: корректная распаковка списка
+    data_list = callback.data.split("_")
+    action = data_list[0]
+    uid = int(data_list[1])
     
     if action == "ok":
         u_info = await bot.get_chat(uid)
@@ -199,7 +202,7 @@ async def main():
     await web.TCPSite(runner, "0.0.0.0", CFG.port).start()
 
     asyncio.create_task(check_expirations_test())
-    log.info("Бот запущен.")
+    log.info("Бот запущен. Ошибки обработки исправлены.")
     await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member"])
 
 if __name__ == "__main__":
