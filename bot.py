@@ -13,13 +13,14 @@ from aiohttp import web
 
 @dataclass(frozen=True)
 class Config:
-    # Твой НОВЫЙ токен вставлен сюда
     token: str = "8527322806:AAFwNdIeXi2mdbIB7duY3rWoyHXxhL7Q9Pg" 
     admin_id: int = 942900279
     channel_id: int = -1003581309063
     db_url: str = os.getenv("MONGODB_URI")
     sub_duration_test: timedelta = timedelta(minutes=1) 
     check_interval: int = 20
+    pay_ru: str = "2204120115044840"
+    pay_paypal: str = "neo832002@yahoo.com"
     port: int = int(os.getenv("PORT", 10000))
 
 CFG = Config()
@@ -78,7 +79,6 @@ async def on_user_join(event: ChatMemberUpdated):
     if event.chat.id != CFG.channel_id: return
     user_id = event.from_user.id
     user_data = await subs_collection.find_one({"user_id": user_id, "status": "pending"})
-
     if user_data:
         expire = datetime.now() + CFG.sub_duration_test
         await subs_collection.update_one({"user_id": user_id}, {"$set": {"status": "active", "expire_date": expire}})
@@ -95,7 +95,7 @@ async def cmd_start(message: types.Message):
         return
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Реквизиты / Payment info", callback_data="pay")],
+        [InlineKeyboardButton(text="💳 Реквизиты / Payment info", callback_data="pay_info")],
         [InlineKeyboardButton(text="🔎 Проверить подписку / Check sub", callback_data="check_sub")]
     ])
     await message.answer(
@@ -104,8 +104,9 @@ async def cmd_start(message: types.Message):
         reply_markup=kb
     )
 
-@dp.callback_query(F.data == "pay")
+@dp.callback_query(F.data == "pay_info")
 async def send_pay(callback: types.CallbackQuery):
+    log.info(f"User {callback.from_user.id} requested payment info")
     await callback.message.answer(
         f"💳 РФ: `{CFG.pay_ru}`\n🅿️ PayPal: `{CFG.pay_paypal}`\n\n"
         f"Пришлите фото чека после оплаты.\nSend receipt photo after payment.", 
@@ -140,7 +141,7 @@ async def cb_stats(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("terminate_"))
 async def terminate_sub(callback: types.CallbackQuery):
-    uid = int(callback.data.split("_")[1])
+    uid = int(callback.data.split("_"))
     await kick_user(uid)
     await callback.message.edit_text("✅ Удален / Removed.")
     await callback.answer()
@@ -159,7 +160,7 @@ async def handle_photo(message: types.Message):
 @dp.callback_query(F.data.startswith(("ok_", "no_")))
 async def admin_decision(callback: types.CallbackQuery):
     if callback.from_user.id != CFG.admin_id: return
-    action, uid = callback.data.split("_")[0], int(callback.data.split("_")[1])
+    action, uid = callback.data.split("_"), int(callback.data.split("_"))
     
     if action == "ok":
         u_info = await bot.get_chat(uid)
@@ -186,7 +187,6 @@ async def handle_hc(request): return web.Response(text="OK")
 
 async def main():
     await init_db()
-    # Удаляем вебхук при каждом запуске для нового токена
     await bot.delete_webhook(drop_pending_updates=True)
     await set_bot_commands()
     
