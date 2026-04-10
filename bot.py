@@ -37,7 +37,7 @@ subs_collection = db.subs
 bot = Bot(token=CFG.token)
 dp = Dispatcher()
 
-# --- System ---
+# --- Системные функции ---
 
 async def init_db():
     await subs_collection.create_index("user_id", unique=True)
@@ -46,8 +46,8 @@ async def set_bot_commands():
     try:
         await bot.set_my_commands([BotCommand(command="start", description="🏠 Menu / Меню")], scope=BotCommandScopeDefault())
         await bot.set_my_commands([
-            BotCommand(command="start", description="🏠 Menu / Меню"),
-            BotCommand(command="stats", description="📊 Stats / Статистика")
+            BotCommand(command="start", description="🏠 Панель управления"),
+            BotCommand(command="stats", description="📊 Статистика")
         ], scope=BotCommandScopeChat(chat_id=CFG.admin_id))
     except: pass
 
@@ -86,13 +86,13 @@ async def check_expirations_daily():
                     except: pass
         except Exception as e: log.error(f"Cron Error: {e}")
 
-# --- User Handlers ---
+# --- Обработчики Пользователя ---
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     if message.from_user.id == CFG.admin_id:
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📊 Stats / Статистика", callback_data="admin_stats")]])
-        await message.answer("Admin Panel / Панель администратора:", reply_markup=kb)
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")]])
+        await message.answer("Добро пожаловать, админ! Панель управления:", reply_markup=kb)
         return
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -125,7 +125,7 @@ async def check_sub(callback: types.CallbackQuery):
         await callback.message.answer(f"✅ Active until / До: {u['expire_date'].strftime('%d.%m.%Y %H:%M')}")
     await callback.answer()
 
-# --- Admin Handlers ---
+# --- Обработчики Админа (ТОЛЬКО РУССКИЙ) ---
 
 @dp.message(Command("stats"))
 async def cmd_stats(message: types.Message):
@@ -139,12 +139,12 @@ async def cb_stats(union: types.CallbackQuery | types.Message):
     msg_obj = union.message if isinstance(union, types.CallbackQuery) else union
     
     if not users:
-        await msg_obj.answer("DB is empty / База пуста.")
+        await msg_obj.answer("База данных пуста.")
     else:
         for u in users:
-            st = "⏳ Pending" if u.get("status") == "pending" else f"✅ Until: {u['expire_date'].strftime('%d.%m.%Y')}"
-            kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Kick / Удалить", callback_data=f"terminate_{u['user_id']}") ]])
-            await msg_obj.answer(f"👤 {u.get('full_name')}\nID: `{u['user_id']}`\n{st}", reply_markup=kb)
+            st = "⏳ Ожидает входа" if u.get("status") == "pending" else f"✅ До: {u['expire_date'].strftime('%d.%m.%Y')}"
+            kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Исключить", callback_data=f"terminate_{u['user_id']}") ]])
+            await msg_obj.answer(f"👤 {u.get('full_name')}\nID: `{u['user_id']}`\nСтатус: {st}", reply_markup=kb)
     if isinstance(union, types.CallbackQuery): await union.answer()
 
 @dp.callback_query(F.data.startswith("terminate_"))
@@ -152,7 +152,7 @@ async def terminate_sub(callback: types.CallbackQuery):
     if callback.from_user.id != CFG.admin_id: return
     uid = int(callback.data.split("_")[1])
     await kick_user(uid)
-    await callback.message.edit_text("✅ Removed / Удален.")
+    await callback.message.edit_text("✅ Пользователь успешно удален.")
     await callback.answer()
 
 @dp.callback_query(F.data.startswith(("ok_", "no_")))
@@ -175,21 +175,25 @@ async def admin_decision(callback: types.CallbackQuery):
             }}, upsert=True
         )
         await bot.send_message(uid, f"✅ Payment accepted! Your link / Оплата принята! Ссылка:\n{link.invite_link}")
+        # Ответ админу
+        await bot.send_message(CFG.admin_id, f"✅ Доступ для {u_info.full_name} одобрен.")
     else:
         await bot.send_message(uid, "❌ Declined / Отказано.")
+        await bot.send_message(CFG.admin_id, f"❌ Вы отклонили чек пользователя {uid}.")
+    
     await callback.message.delete()
     await callback.answer()
 
-# --- Photo Handler ---
+# --- Обработка чеков и вступлений ---
 
 @dp.message(F.photo)
 async def handle_photo(message: types.Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Appprove", callback_data=f"ok_{message.from_user.id}"),
-        InlineKeyboardButton(text="❌ Decline", callback_data=f"no_{message.from_user.id}")
+        InlineKeyboardButton(text="✅ Одобрить", callback_data=f"ok_{message.from_user.id}"),
+        InlineKeyboardButton(text="❌ Отказать", callback_data=f"no_{message.from_user.id}")
     ]])
     await bot.send_photo(CFG.admin_id, message.photo[-1].file_id, 
-                         caption=f"Receipt from: {message.from_user.full_name}\nID: `{message.from_user.id}`", reply_markup=kb)
+                         caption=f"Новый чек!\nОт: {message.from_user.full_name}\nID: `{message.from_user.id}`", reply_markup=kb)
     await message.answer("⏳ Receipt sent to admin.\n⏳ Чек отправлен админу.")
 
 @dp.chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
@@ -203,7 +207,7 @@ async def on_user_join(event: ChatMemberUpdated):
         try: await bot.send_message(user_id, f"✅ Access granted until / Доступ открыт до: {expire.strftime('%d.%m.%Y')}")
         except: pass
 
-# --- Start ---
+# --- Запуск ---
 
 async def handle_hc(request): return web.Response(text="Bot is running")
 
