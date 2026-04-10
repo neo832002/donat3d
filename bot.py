@@ -23,7 +23,7 @@ class Config:
     price_ru: str = "400 руб"
     price_paypal: str = "4$"
     port: int = int(os.getenv("PORT", 10000))
-    check_time: time = time(12, 0)
+    check_time: time = time(12, 0) # UTC (15:00 по МСК)
 
 CFG = Config()
 
@@ -42,6 +42,15 @@ dp = Dispatcher()
 async def init_db():
     await subs_collection.create_index("user_id", unique=True)
 
+async def set_bot_commands():
+    try:
+        await bot.set_my_commands([BotCommand(command="start", description="🏠 Меню / Menu")], scope=BotCommandScopeDefault())
+        await bot.set_my_commands([
+            BotCommand(command="start", description="🏠 Панель управления"),
+            BotCommand(command="stats", description="📊 Статистика")
+        ], scope=BotCommandScopeChat(chat_id=CFG.admin_id))
+    except: pass
+
 async def kick_user(user_id: int):
     try:
         user_data = await subs_collection.find_one({"user_id": user_id})
@@ -50,7 +59,6 @@ async def kick_user(user_id: int):
             except: pass
         await bot.ban_chat_member(CFG.channel_id, user_id)
         await bot.unban_chat_member(CFG.channel_id, user_id)
-        # ПОЛНОЕ УДАЛЕНИЕ ИЗ БАЗЫ
         await subs_collection.delete_one({"user_id": user_id})
         return True
     except: return False
@@ -63,23 +71,18 @@ async def check_expirations_daily():
         await asyncio.sleep((target - now).total_seconds())
         
         try:
-            # 1. Уведомление (только если expire_date уже установлена)
             tomorrow = datetime.now() + timedelta(days=1)
-            rem_cursor = subs_collection.find({
-                "expire_date": {"$exists": True, "$lt": tomorrow + timedelta(hours=1), "$gt": tomorrow - timedelta(hours=1)},
-                "status": "active", "notified": {"$ne": True}
-            })
+            rem_cursor = subs_collection.find({"expire_date": {"$exists": True, "$lt": tomorrow + timedelta(hours=1), "$gt": tomorrow - timedelta(hours=1)}, "status": "active", "notified": {"$ne": True}})
             async for u in rem_cursor:
                 try:
                     await bot.send_message(u["user_id"], "⚠️ **Внимание!** Подписка истекает через 24 часа.\n⚠️ **Attention!** Subscription expires in 24 hours.")
                     await subs_collection.update_one({"user_id": u["user_id"]}, {"$set": {"notified": True}})
                 except: pass
 
-            # 2. Удаление истекших
             exp_cursor = subs_collection.find({"expire_date": {"$exists": True, "$lt": datetime.now()}})
             async for u in exp_cursor:
                 if await kick_user(u["user_id"]):
-                    try: await bot.send_message(u["user_id"], "🔴 Срок подписки вышел. Все данные удалены.\n🔴 Subscription expired. All data deleted.")
+                    try: await bot.send_message(u["user_id"], "🔴 Срок подписки вышел. Данные удалены.\n🔴 Subscription expired. Data deleted.")
                     except: pass
         except Exception as e: log.error(f"Cron Error: {e}")
 
@@ -89,7 +92,7 @@ async def check_expirations_daily():
 async def cmd_start(message: types.Message):
     if message.from_user.id == CFG.admin_id:
         kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")]])
-        await message.answer("Панель администратора:", reply_markup=kb)
+        await message.answer("Добро пожаловать, админ! Панель управления:", reply_markup=kb)
         return
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -122,16 +125,12 @@ async def check_sub(callback: types.CallbackQuery):
         await callback.message.answer("❌ Нет активной подписки.\n❌ No active subscription.")
         await callback.answer(); return
 
-    # Если подписка оплачена, но он еще ни разу не вошел (нет даты истечения)
     if "expire_date" not in u:
-        await callback.message.answer(
-            f"✅ Оплата подтверждена, но вы еще не вступили в канал.\n"
-            f"Ваша ссылка / Your link:\n{u['invite_link']}"
-        )
+        await callback.message.answer(f"✅ Оплата подтверждена. Ваша ссылка:\n{u['invite_link']}\n\n✅ Payment confirmed. Your link above.")
         await callback.answer(); return
 
     if u["expire_date"] < datetime.now():
-        await kick_user(user_id) # На всякий случай удаляем если пропустил крон
+        await kick_user(user_id)
         await callback.message.answer("🔴 Подписка истекла.\n🔴 Subscription expired.")
         await callback.answer(); return
 
@@ -140,8 +139,8 @@ async def check_sub(callback: types.CallbackQuery):
         if member.status in ["member", "administrator", "creator"]:
             await callback.message.answer(f"✅ Активна до / Active until: {u['expire_date'].strftime('%d.%m.%Y %H:%M')}")
         else:
-            # Генерируем новую ссылку, но НЕ МЕНЯЕМ дату истечения в базе
             link = await bot.create_chat_invite_link(CFG.channel_id, member_limit=1)
+            await subs_collection.update_one({"user_id": user_id}, {"$set": {"invite_link": link.invite_link}})
             await callback.message.answer(
                 f"✅ Подписка активна до: {u['expire_date'].strftime('%d.%m.%Y')}\n\n"
                 f"⚠️ Вас нет в канале! Новая ссылка / New link:\n{link.invite_link}"
@@ -159,19 +158,15 @@ async def cb_stats(callback: types.CallbackQuery):
     if not users:
         await callback.message.answer("База данных пуста."); await callback.answer(); return
     for u in users:
-        if "expire_date" not in u:
-            st = "⏳ Ожидает первого входа"
-        else:
-            st = f"✅ До: {u['expire_date'].strftime('%d.%m.%Y')}"
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Удалить", callback_data=f"terminate_{u['user_id']}") ]])
+        st = f"✅ До: {u['expire_date'].strftime('%d.%m.%Y')}" if "expire_date" in u else "⏳ Ожидает входа"
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Исключить", callback_data=f"terminate_{u['user_id']}") ]])
         await callback.message.answer(f"👤 {u.get('full_name')}\nID: `{u['user_id']}`\n{st}", reply_markup=kb)
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("terminate_"))
 async def terminate_sub(callback: types.CallbackQuery):
     uid = int(callback.data.split("_")[1])
-    await kick_user(uid)
-    await callback.message.edit_text("✅ Данные удалены."); await callback.answer()
+    await kick_user(uid); await callback.message.edit_text("✅ Удален."); await callback.answer()
 
 @dp.callback_query(F.data.startswith(("ok_", "no_")))
 async def admin_decision(callback: types.CallbackQuery):
@@ -180,42 +175,32 @@ async def admin_decision(callback: types.CallbackQuery):
     if action == "ok":
         u_info = await bot.get_chat(uid)
         link = await bot.create_chat_invite_link(CFG.channel_id, member_limit=1)
-        # Сохраняем БЕЗ expire_date
-        await subs_collection.update_one(
-            {"user_id": uid}, 
-            {"$set": {
-                "username": u_info.username or "", 
-                "full_name": u_info.full_name or "User", 
-                "status": "pending",
-                "invite_link": link.invite_link
-            }}, upsert=True
-        )
-        await bot.send_message(uid, f"✅ Оплата принята! Срок 30 дней пойдет после входа:\n{link.invite_link}")
+        await subs_collection.update_one({"user_id": uid}, {"$set": {"username": u_info.username or "", "full_name": u_info.full_name or "User", "status": "pending", "invite_link": link.invite_link}}, upsert=True)
+        await bot.send_message(uid, f"✅ Оплата принята! Срок 30 дней пойдет после входа:\n{link.invite_link}\n\n✅ Payment accepted! Your link above.")
     else:
         await bot.send_message(uid, "❌ Отказано / Declined.")
     await callback.message.delete(); await callback.answer()
 
-# --- Логика вступления ---
+# --- Логика вступления и чеков ---
 
 @dp.chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
 async def on_user_join(event: ChatMemberUpdated):
     if event.chat.id != CFG.channel_id: return
     user_id = event.from_user.id
     user_data = await subs_collection.find_one({"user_id": user_id})
-    
     if user_data:
-        # Если expire_date еще нет (это самый первый вход) — устанавливаем её
+        # ОТЗЫВАЕМ ССЫЛКУ СРАЗУ
+        if "invite_link" in user_data:
+            try:
+                await bot.revoke_chat_invite_link(CFG.channel_id, user_data["invite_link"])
+                await subs_collection.update_one({"user_id": user_id}, {"$unset": {"invite_link": ""}})
+            except: pass
+        # УСТАНАВЛИВАЕМ СРОК (только первый раз)
         if "expire_date" not in user_data:
             expire = datetime.now() + CFG.sub_duration
-            await subs_collection.update_one(
-                {"user_id": user_id}, 
-                {"$set": {"status": "active", "expire_date": expire, "notified": False}}
-            )
-            try: await bot.send_message(user_id, f"✅ Доступ открыт на 30 дней! До: {expire.strftime('%d.%m.%Y')}")
+            await subs_collection.update_one({"user_id": user_id}, {"$set": {"status": "active", "expire_date": expire, "notified": False}})
+            try: await bot.send_message(user_id, f"✅ Доступ открыт до: {expire.strftime('%d.%m.%Y')}\n✅ Access granted until date above.")
             except: pass
-        else:
-            # Если он просто перезашел по новой ссылке, дату не меняем
-            await subs_collection.update_one({"user_id": user_id}, {"$set": {"status": "active"}})
 
 @dp.message(F.photo)
 async def handle_photo(message: types.Message):
@@ -226,7 +211,7 @@ async def handle_photo(message: types.Message):
 async def handle_hc(request): return web.Response(text="OK")
 
 async def main():
-    await init_db()
+    await init_db(); await set_bot_commands()
     app = web.Application(); app.router.add_get("/", handle_hc)
     runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", CFG.port).start()
