@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 
 from motor.motor_asyncio import AsyncIOMotorClient
 from aiogram import Bot, Dispatcher, F, types
-from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command, ChatMemberUpdatedFilter
 from aiogram.filters.chat_member_updated import JOIN_TRANSITION
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand, BotCommandScopeChat, BotCommandScopeDefault, ChatMemberUpdated
@@ -20,7 +19,6 @@ class Config:
     db_url: str = os.getenv("MONGODB_URI")
     sub_duration_test: timedelta = timedelta(minutes=1) 
     check_interval: int = 20
-    # ВОССТАНОВЛЕННЫЕ РЕКВИЗИТЫ:
     pay_ru: str = "2204120115044840"
     pay_paypal: str = "neo832002@yahoo.com"
     port: int = int(os.getenv("PORT", 10000))
@@ -144,7 +142,7 @@ async def cb_stats(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("terminate_"))
 async def terminate_sub(callback: types.CallbackQuery):
-    uid = int(callback.data.split("_")[1])
+    uid = int(callback.data.split("_")[1]) # ИСПРАВЛЕНО
     await kick_user(uid)
     await callback.message.edit_text("✅ Удален / Removed.")
     await callback.answer()
@@ -164,7 +162,8 @@ async def handle_photo(message: types.Message):
 async def admin_decision(callback: types.CallbackQuery):
     if callback.from_user.id != CFG.admin_id: return
     parts = callback.data.split("_")
-    action, uid = parts[0], int(parts[1])
+    action = parts[0]
+    uid = int(parts[1]) # ИСПРАВЛЕНО
     
     if action == "ok":
         u_info = await bot.get_chat(uid)
@@ -191,7 +190,6 @@ async def handle_hc(request): return web.Response(text="OK")
 
 async def main():
     await init_db()
-    # Удаляем вебхук при каждом запуске
     await bot.delete_webhook(drop_pending_updates=True)
     await set_bot_commands()
     
