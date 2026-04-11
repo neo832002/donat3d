@@ -74,10 +74,13 @@ async def check_expirations_daily():
                     except: pass
         except Exception as e: log.error(f"Cron Error: {e}")
 
-# --- Обработчики СТРОГО для личных сообщений (F.chat.type == "private") ---
+# --- Обработчики СТРОГО для личных сообщений ---
 
-@dp.message(Command("start"), F.chat.type == "private")
+@dp.message(Command("start"))
 async def cmd_start(message: types.Message):
+    # Если это НЕ личное сообщение, игнорируем полностью
+    if message.chat.type != "private": return
+    
     if message.from_user.id == CFG.admin_id:
         kb = InlineKeyboardMarkup(inline_keyboard=])
         await message.answer("Добро пожаловать, админ! Панель управления:", reply_markup=kb)
@@ -86,10 +89,20 @@ async def cmd_start(message: types.Message):
         ])
         await message.answer(f"👋 Привет! Подписка на 30 дней.\n💰 Стоимость: **{CFG.price_ru}** или **{CFG.price_paypal}**.\n\n👋 Hello! Subscription for 30 days.\n💰 Price: **{CFG.price_ru}** or **{CFG.price_paypal}**.", reply_markup=kb, parse_mode="Markdown")
 
-@dp.message(F.photo, F.chat.type == "private")
+@dp.message(F.photo)
 async def handle_photo(message: types.Message):
+    # КРИТИЧЕСКАЯ ПРОВЕРКА: если сообщение из канала или группы — молчим!
+    if message.chat.type != "private":
+        return
+    
+    # Если отправитель — сам канал (в случае пересылок), тоже молчим
+    if not message.from_user:
+        return
+
     kb = InlineKeyboardMarkup(inline_keyboard=])
+    # Отправляем админу в ЛС
     await bot.send_photo(CFG.admin_id, message.photo[-1].file_id, caption=f"Новый чек!\nОт: {message.from_user.full_name}\nID: `{message.from_user.id}`", reply_markup=kb)
+    # Отвечаем пользователю в ЛС
     await message.answer("⏳ Чек отправлен админу.\n⏳ Receipt sent to admin.")
 
 @dp.callback_query(F.data == "pay_info")
@@ -142,7 +155,9 @@ async def main():
     app = web.Application(); app.router.add_get("/", handle_hc)
     runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", CFG.port).start()
-    await asyncio.gather(dp.start_polling(bot), check_expirations_daily())
+    
+    # Мы НЕ добавляем обработчик channel_post, чтобы бот не видел посты в канале
+    await asyncio.gather(dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member"]), check_expirations_daily())
 
 if __name__ == "__main__":
     asyncio.run(main())
