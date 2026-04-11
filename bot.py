@@ -36,16 +36,16 @@ subs_collection = db.subs
 bot = Bot(token=CFG.token)
 dp = Dispatcher()
 
-# --- MIDDLEWARE ДЛЯ БЛОКИРОВКИ КАНАЛА ---
-class OnlyPrivateMiddleware(BaseMiddleware):
+# --- MIDDLEWARE ДЛЯ ПОЛНОЙ БЛОКИРОВКИ КАНАЛА ---
+class PrivateOnlyMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
-        # Если это сообщение и оно не из лички — игнорируем полностью
+        # Если это сообщение и оно НЕ из лички — бот его просто не видит
         if isinstance(event, Message):
             if event.chat.type != "private":
                 return
         return await handler(event, data)
 
-dp.message.middleware(OnlyPrivateMiddleware())
+dp.message.middleware(PrivateOnlyMiddleware())
 
 # --- Системные функции ---
 async def init_db():
@@ -84,7 +84,7 @@ async def check_expirations_daily():
                     except: pass
         except Exception as e: log.error(f"Cron Error: {e}")
 
-# --- Обработчики (теперь защищены middleware) ---
+# --- Обработчики ---
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
@@ -151,8 +151,7 @@ async def main():
     app = web.Application(); app.router.add_get("/", handle_hc)
     runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", CFG.port).start()
-    
-    # Явно разрешаем только нужные типы обновлений. Channel Post НЕ разрешен.
+    # Разрешаем только ЛС, колбэки и вступления
     await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member"])
 
 if __name__ == "__main__":
