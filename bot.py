@@ -36,15 +36,16 @@ subs_collection = db.subs
 bot = Bot(token=CFG.token)
 dp = Dispatcher()
 
-# --- ФИЛЬТР: Пропускать только личные сообщения ---
-class OnlyPrivateMiddleware(BaseMiddleware):
+# --- MIDDLEWARE ДЛЯ ПОЛНОЙ БЛОКИРОВКИ КАНАЛА ---
+class PrivateOnlyMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
+        # Если это сообщение и оно НЕ из личного чата — игнорируем
         if isinstance(event, Message):
             if event.chat.type != "private":
-                return # Игнорируем всё, что не в ЛС
+                return
         return await handler(event, data)
 
-dp.message.middleware(OnlyPrivateMiddleware())
+dp.message.middleware(PrivateOnlyMiddleware())
 
 # --- Системные функции ---
 async def init_db():
@@ -89,7 +90,7 @@ async def check_expirations_daily():
 async def cmd_start(message: types.Message):
     if message.from_user.id == CFG.admin_id:
         kb = InlineKeyboardMarkup(inline_keyboard=])
-        await message.answer("Добро пожаловать, админ!", reply_markup=kb)
+        await message.answer("Добро пожаловать, админ! Панель управления / Admin panel:", reply_markup=kb)
     else:
         kb = InlineKeyboardMarkup(inline_keyboard=,
         ])
@@ -97,6 +98,7 @@ async def cmd_start(message: types.Message):
 
 @dp.message(F.photo)
 async def handle_photo(message: types.Message):
+    # Код одобрения (только для админа)
     kb = InlineKeyboardMarkup(inline_keyboard=])
     await bot.send_photo(CFG.admin_id, message.photo[-1].file_id, caption=f"Новый чек!\nОт: {message.from_user.full_name}\nID: `{message.from_user.id}`", reply_markup=kb)
     await message.answer("⏳ Чек отправлен админу.\n⏳ Receipt sent to admin.")
@@ -135,11 +137,12 @@ async def admin_decision(callback: types.CallbackQuery):
 @dp.chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
 async def on_user_join(event: ChatMemberUpdated):
     if event.chat.id != CFG.channel_id: return
-    user_data = await subs_collection.find_one({"user_id": event.from_user.id})
+    user_id = event.from_user.id
+    user_data = await subs_collection.find_one({"user_id": user_id})
     if user_data and "expire_date" not in user_data:
         expire = datetime.now() + CFG.sub_duration
-        await subs_collection.update_one({"user_id": event.from_user.id}, {"$set": {"status": "active", "expire_date": expire, "notified": False}})
-        try: await bot.send_message(event.from_user.id, f"✅ Доступ открыт до: {expire.strftime('%d.%m.%Y')}\n✅ Access granted until date above.")
+        await subs_collection.update_one({"user_id": user_id}, {"$set": {"status": "active", "expire_date": expire, "notified": False}})
+        try: await bot.send_message(user_id, f"✅ Доступ открыт до: {expire.strftime('%d.%m.%Y')}\n✅ Access granted until date above.")
         except: pass
 
 async def handle_hc(request): return web.Response(text="OK")
@@ -149,7 +152,7 @@ async def main():
     app = web.Application(); app.router.add_get("/", handle_hc)
     runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", CFG.port).start()
-    # Разрешаем только ЛС, колбэки и вступления (КАНАЛЫ ОТКЛЮЧЕНЫ)
+    # Отключаем получение постов из канала на уровне сервера
     await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member"])
 
 if __name__ == "__main__":
