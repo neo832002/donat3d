@@ -3,7 +3,6 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-
 from motor.motor_asyncio import AsyncIOMotorClient
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command, ChatMemberUpdatedFilter
@@ -23,7 +22,6 @@ class Config:
     port: int = int(os.getenv("PORT", 10000))
 
 CFG = Config()
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("sub-bot")
 
@@ -35,7 +33,6 @@ bot = Bot(token=CFG.token)
 dp = Dispatcher()
 
 # --- Настройки для Render (HTTP сервер) ---
-
 async def handle_ping(request):
     return web.Response(text="Bot is alive")
 
@@ -49,7 +46,6 @@ async def run_http_server():
     log.info(f"HTTP server started on port {CFG.port}")
 
 # --- Системные функции ---
-
 async def set_bot_commands():
     await bot.set_my_commands(
         [
@@ -90,13 +86,11 @@ async def check_expirations():
         await asyncio.sleep(3600)
 
 # --- Активация при вступлении ---
-
 @dp.chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
 async def on_user_join(event: types.ChatMemberUpdated):
     if event.chat.id != CFG.channel_id: return
     uid = event.from_user.id
     user = await subs_collection.find_one({"user_id": uid})
-    
     if user and user.get("status") == "paid" and not user.get("expire_date"):
         expire = datetime.now() + timedelta(days=CFG.sub_days)
         await subs_collection.update_one(
@@ -110,8 +104,7 @@ async def on_user_join(event: types.ChatMemberUpdated):
         except: pass
 
 # --- Обработчики Админа ---
-
-@dp.message(Command("clear_db"))
+@dp.message(Command("clear_db"), F.chat.type == "private")
 async def cmd_clear_db(message: types.Message):
     if message.from_user.id != CFG.admin_id: return
     kb = InlineKeyboardMarkup(inline_keyboard=])
@@ -124,7 +117,7 @@ async def cb_clear(callback: types.CallbackQuery):
     await callback.message.edit_text("✅ База пуста. / DB empty.")
     await callback.answer()
 
-@dp.message(Command("stats"))
+@dp.message(Command("stats"), F.chat.type == "private")
 async def cmd_stats(message: types.Message):
     if message.from_user.id != CFG.admin_id: return
     cursor = subs_collection.find()
@@ -148,8 +141,7 @@ async def cb_kick(callback: types.CallbackQuery):
     await callback.answer()
 
 # --- Обработчики Пользователя ---
-
-@dp.message(Command("start"))
+@dp.message(Command("start"), F.chat.type == "private")
 async def cmd_start(message: types.Message):
     if message.from_user.id == CFG.admin_id:
         kb = InlineKeyboardMarkup(inline_keyboard=,
@@ -160,7 +152,7 @@ async def cmd_start(message: types.Message):
     ])
     await message.answer("👋 Оплатите доступ и пришлите чек.\n👋 Pay for access and send a receipt.", reply_markup=kb)
 
-@dp.message(Command("my_sub"))
+@dp.message(Command("my_sub"), F.chat.type == "private")
 @dp.callback_query(F.data == "check_my_sub")
 async def check_user_sub(event: types.Message | types.CallbackQuery):
     user_id = event.from_user.id
@@ -180,7 +172,7 @@ async def check_user_sub(event: types.Message | types.CallbackQuery):
         except: await msg.answer("Ошибка / Error")
     elif user.get("status") == "paid":
         link = await bot.create_chat_invite_link(CFG.channel_id, member_limit=1)
-        await msg.answer(f"⏳ Оплата подтверждена! Вступите в канал:\n{link.invite_link}")
+        await msg.answer(f"🧨 Оплата подтверждена! Вступите в канал:\n{link.invite_link}")
     if isinstance(event, types.CallbackQuery): await event.answer()
 
 @dp.callback_query(F.data == "pay")
@@ -191,9 +183,10 @@ async def cb_pay(callback: types.CallbackQuery):
 @dp.message(F.photo, F.chat.type == "private")
 async def handle_receipt(message: types.Message):
     if message.from_user.id == CFG.admin_id: return
-    kb = InlineKeyboardMarkup(inline_keyboard=])
+    kb = InlineKeyboardMarkup(inline_keyboard=,
+    ])
     await bot.send_photo(CFG.admin_id, message.photo[-1].file_id, caption=f"Чек от {message.from_user.full_name}\nID: `{message.from_user.id}`", reply_markup=kb)
-    await message.answer("⏳ Чек на проверке. / Receipt in verification.")
+    await message.answer("🧨 Чек на проверке. / Receipt in verification.")
 
 @dp.callback_query(F.data.startswith(("app_", "ref_")))
 async def cb_decision(callback: types.CallbackQuery):
