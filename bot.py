@@ -14,8 +14,8 @@ from aiohttp import web
 
 @dataclass(frozen=True)
 class Config:
-    token: str = os.getenv("BOT_TOKEN", "8527322806:AAFwNdIeXi2mdbIB7duY3rWoyHXxhL7Q9Pg") 
-    admin_id: int = 942900279 # УБЕДИТЕСЬ, ЧТО ЭТО ВАШ ЛИЧНЫЙ ID
+    token: str = os.getenv("TELEGRAM_TOKEN", "8527322806:AAFwNdIeXi2mdbIB7duY3rWoyHXxhL7Q9Pg") 
+    admin_id: int = 942900279
     channel_id: int = -1003581309063
     db_url: str = os.getenv("MONGODB_URI")
     sub_duration: timedelta = timedelta(days=30) 
@@ -27,37 +27,24 @@ class Config:
     check_time: time = time(12, 0) # UTC
 
 CFG = Config()
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("sub-bot")
 
 client = AsyncIOMotorClient(CFG.db_url)
 db = client["sub_bot_db"] 
 subs_collection = db.subs
-
 bot = Bot(token=CFG.token)
 dp = Dispatcher()
 
-# СТРОГИЙ ФИЛЬТР: Бот вообще не видит сообщений из каналов и групп
-dp.message.filter(F.chat.type == "private")
-
-# --- Системные функции ---
+# Глобальный фильтр: игнорировать всё, кроме личных сообщений (Private)
+@dp.message.outer_middleware()
+async def private_only_middleware(handler, event, data):
+    if isinstance(event, types.Message) and event.chat.type != "private":
+        return
+    return await handler(event, data)
 
 async def init_db():
     await subs_collection.create_index("user_id", unique=True)
-
-async def set_bot_commands():
-    try:
-        await bot.set_my_commands([
-            BotCommand(command="start", description="🏠 Меню / Menu"),
-            BotCommand(command="stats", description="🔎 Проверить статус подписки / Check status")
-        ], scope=BotCommandScopeDefault())
-        
-        await bot.set_my_commands([
-            BotCommand(command="start", description="🏠 Панель управления"),
-            BotCommand(command="stats", description="📊 Статистика всех подписчиков")
-        ], scope=BotCommandScopeChat(chat_id=CFG.admin_id))
-    except: pass
 
 async def kick_user(user_id: int):
     try:
@@ -79,8 +66,8 @@ async def check_expirations_daily():
         await asyncio.sleep((target - now).total_seconds())
         try:
             tomorrow = datetime.now() + timedelta(days=1)
-            rem_cursor = subs_collection.find({"expire_date": {"$exists": True, "$lt": tomorrow + timedelta(hours=1), "$gt": tomorrow - timedelta(hours=1)}, "status": "active", "notified": {"$ne": True}})
-            async for u in rem_cursor:
+            cursor = subs_collection.find({"expire_date": {"$exists": True, "$lt": tomorrow + timedelta(hours=1), "$gt": tomorrow - timedelta(hours=1)}, "status": "active", "notified": {"$ne": True}})
+            async for u in cursor:
                 try:
                     await bot.send_message(u["user_id"], "⚠️ **Внимание!** Подписка истекает через 24 часа.\n⚠️ **Attention!** Subscription expires in 24 hours.")
                     await subs_collection.update_one({"user_id": u["user_id"]}, {"$set": {"notified": True}})
@@ -92,95 +79,36 @@ async def check_expirations_daily():
                     except: pass
         except Exception as e: log.error(f"Cron Error: {e}")
 
-async def process_check_status(user_id: int, message_to_reply: types.Message):
-    u = await subs_collection.find_one({"user_id": user_id})
-    if not u:
-        await message_to_reply.answer("❌ Нет активной подписки.\n❌ No active subscription.")
-        return
-    if "expire_date" not in u:
-        await message_to_reply.answer(f"✅ Оплата подтверждена. Ваша ссылка:\n{u['invite_link']}\n\n✅ Payment confirmed. Your link above.")
-        return
-    if u["expire_date"] < datetime.now():
-        await kick_user(user_id)
-        await message_to_reply.answer("🔴 Подписка истекла.\n🔴 Subscription expired.")
-        return
-    try:
-        member = await bot.get_chat_member(CFG.channel_id, user_id)
-        if member.status in ["member", "administrator", "creator"]:
-            await message_to_reply.answer(f"✅ Активна до / Active until: {u['expire_date'].strftime('%d.%m.%Y %H:%M')}")
-        else:
-            link = await bot.create_chat_invite_link(CFG.channel_id, member_limit=1)
-            await subs_collection.update_one({"user_id": user_id}, {"$set": {"invite_link": link.invite_link}})
-            await message_to_reply.answer(
-                f"✅ Подписка активна до: {u['expire_date'].strftime('%d.%m.%Y')}\n\n"
-                f"⚠️ Вас нет в канале! Новая ссылка / New link:\n{link.invite_link}"
-            )
-    except:
-        await message_to_reply.answer("❌ Ошибка проверки.\n❌ Error checking status.")
-
-# --- Обработчики ---
-
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     if message.from_user.id == CFG.admin_id:
         kb = InlineKeyboardMarkup(inline_keyboard=])
-        await message.answer("Добро пожаловать, админ! Панель управления:", reply_markup=kb)
+        await bot.send_message(message.from_user.id, "Добро пожаловать, админ!", reply_markup=kb)
         return
     kb = InlineKeyboardMarkup(inline_keyboard=,
     ])
-    await message.answer(
-        f"👋 Привет! Подписка на 30 дней.\n💰 Стоимость: **{CFG.price_ru}** или **{CFG.price_paypal}**.\n\n"
-        f"👋 Hello! Subscription for 30 days.\n💰 Price: **{CFG.price_ru}** or **{CFG.price_paypal}**.", 
-        reply_markup=kb, parse_mode="Markdown"
-    )
-
-@dp.message(Command("stats"))
-async def cmd_user_stats(message: types.Message):
-    if message.from_user.id == CFG.admin_id:
-        await cb_stats(message)
-    else:
-        await process_check_status(message.from_user.id, message)
+    await bot.send_message(message.from_user.id, f"👋 Привет! Подписка на 30 дней.\n💰 Стоимость: **{CFG.price_ru}** или **{CFG.price_paypal}**.\n\n👋 Hello! Subscription for 30 days.\n💰 Price: **{CFG.price_ru}** or **{CFG.price_paypal}**.", reply_markup=kb, parse_mode="Markdown")
 
 @dp.callback_query(F.data == "pay_info")
 async def send_pay(callback: types.CallbackQuery):
     msg = (f"📍 **Нажмите для копирования / Tap to copy:**\n\n🇷🇺 Карта РФ (**{CFG.price_ru}**):\n`{CFG.pay_ru}`\n\n🌐 PayPal (**{CFG.price_paypal}**):\n`{CFG.pay_paypal}`\n\nПришлите фото чека после оплаты.\nSend receipt photo after payment.")
-    await callback.message.answer(msg, parse_mode="Markdown"); await callback.answer()
+    await bot.send_message(callback.from_user.id, msg, parse_mode="Markdown"); await callback.answer()
 
-@dp.callback_query(F.data == "check_sub")
-async def cb_check_sub(callback: types.CallbackQuery):
-    await process_check_status(callback.from_user.id, callback.message); await callback.answer()
-
-# --- Логика Админа ---
-
-async def cb_stats(union: types.CallbackQuery | types.Message):
-    cursor = subs_collection.find()
-    users = await cursor.to_list(length=None)
-    msg_obj = union.message if isinstance(union, types.CallbackQuery) else union
-    if not users:
-        await msg_obj.answer("База данных пуста.")
-    else:
-        for u in users:
-            st = f"✅ До: {u['expire_date'].strftime('%d.%m.%Y')}" if "expire_date" in u else "⏳ Ожидает входа"
-            usr = f"@{u.get('username')}" if u.get('username') else "нет username"
-            kb = InlineKeyboardMarkup(inline_keyboard=}") ]])
-            await msg_obj.answer(f"👤 {u.get('full_name')}\n🔗 Юзер: {usr}\n🆔 ID: `{u['user_id']}`\n📊 {st}", reply_markup=kb)
-    if isinstance(union, types.CallbackQuery): await union.answer()
-
-@dp.callback_query(F.data == "admin_stats")
-async def cb_admin_stats(callback: types.CallbackQuery):
-    await cb_stats(callback)
-
-@dp.callback_query(F.data.startswith("terminate_"))
-async def terminate_sub(callback: types.CallbackQuery):
-    if callback.from_user.id == CFG.admin_id:
-        uid = int(callback.data.split("_")[1])
-        await kick_user(uid); await callback.message.edit_text("✅ Удален."); await callback.answer()
+@dp.message(F.photo)
+async def handle_photo(message: types.Message):
+    # Если бот почему-то видит это в канале — игнорируем
+    if message.chat.type != "private": return
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=])
+    # Отправляем админу (ВАМ)
+    await bot.send_photo(CFG.admin_id, message.photo[-1].file_id, caption=f"Новый чек!\nОт: {message.from_user.full_name}\nID: `{message.from_user.id}`", reply_markup=kb)
+    # Отвечаем пользователю СТРОГО в его ID
+    await bot.send_message(message.from_user.id, "⏳ Чек отправлен админу.\n⏳ Receipt sent to admin.")
 
 @dp.callback_query(F.data.startswith(("ok_", "no_")))
 async def admin_decision(callback: types.CallbackQuery):
     if callback.from_user.id != CFG.admin_id: return
-    parts = callback.data.split("_")
-    action, uid = parts[0], int(parts[1])
+    action, uid = callback.data.split("_")[0], int(callback.data.split("_")[1])
     if action == "ok":
         u_info = await bot.get_chat(uid)
         link = await bot.create_chat_invite_link(CFG.channel_id, member_limit=1)
@@ -190,43 +118,20 @@ async def admin_decision(callback: types.CallbackQuery):
         await bot.send_message(uid, "❌ Отказано / Declined.")
     await callback.message.delete(); await callback.answer()
 
-# --- Вступление и Фото ---
-
 @dp.chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
 async def on_user_join(event: ChatMemberUpdated):
     if event.chat.id != CFG.channel_id: return
-    user_id = event.from_user.id
-    user_data = await subs_collection.find_one({"user_id": user_id})
-    if user_data:
-        if "invite_link" in user_data:
-            try:
-                await bot.revoke_chat_invite_link(CFG.channel_id, user_data["invite_link"])
-                await subs_collection.update_one({"user_id": user_id}, {"$unset": {"invite_link": ""}})
-            except: pass
-        if "expire_date" not in user_data:
-            expire = datetime.now() + CFG.sub_duration
-            await subs_collection.update_one({"user_id": user_id}, {"$set": {"status": "active", "expire_date": expire, "notified": False}})
-            try: await bot.send_message(user_id, f"✅ Доступ открыт до: {expire.strftime('%d.%m.%Y')}\n✅ Access granted until date above.")
-            except: pass
-
-@dp.message(F.photo)
-async def handle_photo(message: types.Message):
-    # Если admin_id — это канал, мы блокируем отправку
-    if str(CFG.admin_id).startswith("-100"):
-        log.error("КРИТИЧЕСКАЯ ОШИБКА: admin_id в настройках — это ID КАНАЛА, а не человека!")
-        return
-
-    kb = InlineKeyboardMarkup(inline_keyboard=])
-    
-    # Прямая команда: отправить в ЛС админу
-    await bot.send_photo(CFG.admin_id, message.photo[-1].file_id, caption=f"Новый чек!\nОт: {message.from_user.full_name}\nID: `{message.from_user.id}`", reply_markup=kb)
-    # Прямая команда: ответить пользователю в ЛС
-    await message.answer("⏳ Чек отправлен админу.\n⏳ Receipt sent to admin.")
+    user_data = await subs_collection.find_one({"user_id": event.from_user.id})
+    if user_data and "expire_date" not in user_data:
+        expire = datetime.now() + CFG.sub_duration
+        await subs_collection.update_one({"user_id": event.from_user.id}, {"$set": {"status": "active", "expire_date": expire, "notified": False}})
+        try: await bot.send_message(event.from_user.id, f"✅ Доступ открыт до: {expire.strftime('%d.%m.%Y')}\n✅ Access granted until date above.")
+        except: pass
 
 async def handle_hc(request): return web.Response(text="OK")
 
 async def main():
-    await init_db(); await set_bot_commands()
+    await init_db()
     app = web.Application(); app.router.add_get("/", handle_hc)
     runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", CFG.port).start()
