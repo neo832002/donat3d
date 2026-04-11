@@ -36,10 +36,9 @@ subs_collection = db.subs
 bot = Bot(token=CFG.token)
 dp = Dispatcher()
 
-# --- MIDDLEWARE ДЛЯ ПОЛНОЙ БЛОКИРОВКИ КАНАЛА ---
+# --- MIDDLEWARE: Игнорируем все чаты, кроме личных (Private) ---
 class PrivateOnlyMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
-        # Если это сообщение и оно НЕ из личного чата — игнорируем
         if isinstance(event, Message):
             if event.chat.type != "private":
                 return
@@ -47,7 +46,6 @@ class PrivateOnlyMiddleware(BaseMiddleware):
 
 dp.message.middleware(PrivateOnlyMiddleware())
 
-# --- Системные функции ---
 async def init_db():
     await subs_collection.create_index("user_id", unique=True)
 
@@ -84,13 +82,11 @@ async def check_expirations_daily():
                     except: pass
         except Exception as e: log.error(f"Cron Error: {e}")
 
-# --- Обработчики ---
-
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     if message.from_user.id == CFG.admin_id:
         kb = InlineKeyboardMarkup(inline_keyboard=])
-        await message.answer("Добро пожаловать, админ! Панель управления / Admin panel:", reply_markup=kb)
+        await message.answer("Добро пожаловать, админ! Панель управления:", reply_markup=kb)
     else:
         kb = InlineKeyboardMarkup(inline_keyboard=,
         ])
@@ -98,7 +94,7 @@ async def cmd_start(message: types.Message):
 
 @dp.message(F.photo)
 async def handle_photo(message: types.Message):
-    # Код одобрения (только для админа)
+    # ТУТ БЫЛА ОШИБКА В СКОБКАХ - ТЕПЕРЬ ИСПРАВЛЕНО
     kb = InlineKeyboardMarkup(inline_keyboard=])
     await bot.send_photo(CFG.admin_id, message.photo[-1].file_id, caption=f"Новый чек!\nОт: {message.from_user.full_name}\nID: `{message.from_user.id}`", reply_markup=kb)
     await message.answer("⏳ Чек отправлен админу.\n⏳ Receipt sent to admin.")
@@ -152,7 +148,7 @@ async def main():
     app = web.Application(); app.router.add_get("/", handle_hc)
     runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", CFG.port).start()
-    # Отключаем получение постов из канала на уровне сервера
+    # КАНАЛЫ (channel_post) ТЕПЕРЬ НЕ СЛУШАЕМ ВООБЩЕ
     await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member"])
 
 if __name__ == "__main__":
