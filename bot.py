@@ -4,12 +4,12 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, time
 from motor.motor_asyncio import AsyncIOMotorClient
-from aiogram import Bot, Dispatcher, F, types
+from aiogram import Bot, Dispatcher, F, types, BaseMiddleware
 from aiogram.filters import Command, ChatMemberUpdatedFilter
 from aiogram.filters.chat_member_updated import JOIN_TRANSITION
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, \
 BotCommand, BotCommandScopeChat, BotCommandScopeDefault, \
-ChatMemberUpdated
+ChatMemberUpdated, Message
 from aiohttp import web
 
 @dataclass(frozen=True)
@@ -36,8 +36,18 @@ subs_collection = db.subs
 bot = Bot(token=CFG.token)
 dp = Dispatcher()
 
-# --- Системные функции ---
+# --- MIDDLEWARE ДЛЯ БЛОКИРОВКИ КАНАЛА ---
+class OnlyPrivateMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        # Если это сообщение и оно не из лички — игнорируем полностью
+        if isinstance(event, Message):
+            if event.chat.type != "private":
+                return
+        return await handler(event, data)
 
+dp.message.middleware(OnlyPrivateMiddleware())
+
+# --- Системные функции ---
 async def init_db():
     await subs_collection.create_index("user_id", unique=True)
 
@@ -74,13 +84,10 @@ async def check_expirations_daily():
                     except: pass
         except Exception as e: log.error(f"Cron Error: {e}")
 
-# --- Обработчики СТРОГО для личных сообщений ---
+# --- Обработчики (теперь защищены middleware) ---
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    # Если это НЕ личное сообщение, игнорируем полностью
-    if message.chat.type != "private": return
-    
     if message.from_user.id == CFG.admin_id:
         kb = InlineKeyboardMarkup(inline_keyboard=])
         await message.answer("Добро пожаловать, админ! Панель управления:", reply_markup=kb)
@@ -91,18 +98,8 @@ async def cmd_start(message: types.Message):
 
 @dp.message(F.photo)
 async def handle_photo(message: types.Message):
-    # КРИТИЧЕСКАЯ ПРОВЕРКА: если сообщение из канала или группы — молчим!
-    if message.chat.type != "private":
-        return
-    
-    # Если отправитель — сам канал (в случае пересылок), тоже молчим
-    if not message.from_user:
-        return
-
     kb = InlineKeyboardMarkup(inline_keyboard=])
-    # Отправляем админу в ЛС
     await bot.send_photo(CFG.admin_id, message.photo[-1].file_id, caption=f"Новый чек!\nОт: {message.from_user.full_name}\nID: `{message.from_user.id}`", reply_markup=kb)
-    # Отвечаем пользователю в ЛС
     await message.answer("⏳ Чек отправлен админу.\n⏳ Receipt sent to admin.")
 
 @dp.callback_query(F.data == "pay_info")
@@ -125,8 +122,7 @@ async def cb_check_sub(callback: types.CallbackQuery):
 async def admin_decision(callback: types.CallbackQuery):
     if callback.from_user.id != CFG.admin_id: return
     parts = callback.data.split("_")
-    action = parts[0]
-    uid = int(parts[1])
+    action, uid = parts[0], int(parts[1])
     
     if action == "ok":
         u_info = await bot.get_chat(uid)
@@ -156,8 +152,8 @@ async def main():
     runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", CFG.port).start()
     
-    # Мы НЕ добавляем обработчик channel_post, чтобы бот не видел посты в канале
-    await asyncio.gather(dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member"]), check_expirations_daily())
+    # Явно разрешаем только нужные типы обновлений. Channel Post НЕ разрешен.
+    await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member"])
 
 if __name__ == "__main__":
     asyncio.run(main())
