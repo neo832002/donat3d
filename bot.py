@@ -8,6 +8,7 @@ from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command, ChatMemberUpdatedFilter
 from aiogram.filters.chat_member_updated import JOIN_TRANSITION
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand, BotCommandScopeChat, BotCommandScopeDefault
+from aiogram.enums import ChatType
 from aiohttp import web
 
 @dataclass(frozen=True)
@@ -104,7 +105,7 @@ async def on_user_join(event: types.ChatMemberUpdated):
         except: pass
 
 # --- Обработчики Админа ---
-@dp.message(Command("clear_db"), F.chat.type == "private")
+@dp.message(Command("clear_db"), F.chat.type == ChatType.PRIVATE)
 async def cmd_clear_db(message: types.Message):
     if message.from_user.id != CFG.admin_id: return
     kb = InlineKeyboardMarkup(inline_keyboard=])
@@ -117,7 +118,7 @@ async def cb_clear(callback: types.CallbackQuery):
     await callback.message.edit_text("✅ База пуста. / DB empty.")
     await callback.answer()
 
-@dp.message(Command("stats"), F.chat.type == "private")
+@dp.message(Command("stats"), F.chat.type == ChatType.PRIVATE)
 async def cmd_stats(message: types.Message):
     if message.from_user.id != CFG.admin_id: return
     cursor = subs_collection.find()
@@ -128,7 +129,7 @@ async def cmd_stats(message: types.Message):
     for u in users:
         exp = u.get("expire_date")
         date_s = exp.strftime('%d.%m.%Y') if exp else "Ожидает / Waiting"
-        text = f"👤 {u.get('full_name')}\nID: `{u['user_id']}`\n📅 До: {date_s}"
+        text = f"👤 {u.get('full_name', 'User')}\nID: `{u['user_id']}`\n📅 До: {date_s}"
         kb = InlineKeyboardMarkup(inline_keyboard=}")]])
         await message.answer(text, reply_markup=kb)
 
@@ -141,7 +142,7 @@ async def cb_kick(callback: types.CallbackQuery):
     await callback.answer()
 
 # --- Обработчики Пользователя ---
-@dp.message(Command("start"), F.chat.type == "private")
+@dp.message(Command("start"), F.chat.type == ChatType.PRIVATE)
 async def cmd_start(message: types.Message):
     if message.from_user.id == CFG.admin_id:
         kb = InlineKeyboardMarkup(inline_keyboard=,
@@ -152,7 +153,17 @@ async def cmd_start(message: types.Message):
     ])
     await message.answer("👋 Оплатите доступ и пришлите чек.\n👋 Pay for access and send a receipt.", reply_markup=kb)
 
-@dp.message(Command("my_sub"), F.chat.type == "private")
+@dp.callback_query(F.data == "admin_stats_cmd")
+async def cb_admin_stats(callback: types.CallbackQuery):
+    await cmd_stats(callback.message)
+    await callback.answer()
+
+@dp.callback_query(F.data == "admin_clear_cmd")
+async def cb_admin_clear(callback: types.CallbackQuery):
+    await cmd_clear_db(callback.message)
+    await callback.answer()
+
+@dp.message(Command("my_sub"), F.chat.type == ChatType.PRIVATE)
 @dp.callback_query(F.data == "check_my_sub")
 async def check_user_sub(event: types.Message | types.CallbackQuery):
     user_id = event.from_user.id
@@ -180,7 +191,7 @@ async def cb_pay(callback: types.CallbackQuery):
     await callback.message.answer(f"💳 РФ: `{CFG.pay_ru}`\n🅿️ PayPal: `{CFG.pay_paypal}`\nПришлите чек. / Send receipt.")
     await callback.answer()
 
-@dp.message(F.photo, F.chat.type == "private")
+@dp.message(F.photo, F.chat.type == ChatType.PRIVATE)
 async def handle_receipt(message: types.Message):
     if message.from_user.id == CFG.admin_id: return
     kb = InlineKeyboardMarkup(inline_keyboard=,
@@ -208,7 +219,7 @@ async def main():
     await init_db()
     await set_bot_commands()
     await bot.delete_webhook(drop_pending_updates=True)
-    asyncio.create_task(run_http_server()) # Запуск сервера для Render
+    asyncio.create_task(run_http_server()) 
     asyncio.create_task(check_expirations())
     await dp.start_polling(bot, skip_updates=True)
 
