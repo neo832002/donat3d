@@ -15,7 +15,7 @@ from aiohttp import web
 @dataclass(frozen=True)
 class Config:
     token: str = os.getenv("BOT_TOKEN", "8527322806:AAFwNdIeXi2mdbIB7duY3rWoyHXxhL7Q9Pg") 
-    admin_id: int = 942900279
+    admin_id: int = 942900279 # УБЕДИТЕСЬ, ЧТО ЭТО ВАШ ЛИЧНЫЙ ID
     channel_id: int = -1003581309063
     db_url: str = os.getenv("MONGODB_URI")
     sub_duration: timedelta = timedelta(days=30) 
@@ -38,7 +38,7 @@ subs_collection = db.subs
 bot = Bot(token=CFG.token)
 dp = Dispatcher()
 
-# Глобальный фильтр для всех сообщений: обрабатывать только приватные чаты (ЛС)
+# СТРОГИЙ ФИЛЬТР: Бот вообще не видит сообщений из каналов и групп
 dp.message.filter(F.chat.type == "private")
 
 # --- Системные функции ---
@@ -211,8 +211,16 @@ async def on_user_join(event: ChatMemberUpdated):
 
 @dp.message(F.photo)
 async def handle_photo(message: types.Message):
+    # Если admin_id — это канал, мы блокируем отправку
+    if str(CFG.admin_id).startswith("-100"):
+        log.error("КРИТИЧЕСКАЯ ОШИБКА: admin_id в настройках — это ID КАНАЛА, а не человека!")
+        return
+
     kb = InlineKeyboardMarkup(inline_keyboard=])
+    
+    # Прямая команда: отправить в ЛС админу
     await bot.send_photo(CFG.admin_id, message.photo[-1].file_id, caption=f"Новый чек!\nОт: {message.from_user.full_name}\nID: `{message.from_user.id}`", reply_markup=kb)
+    # Прямая команда: ответить пользователю в ЛС
     await message.answer("⏳ Чек отправлен админу.\n⏳ Receipt sent to admin.")
 
 async def handle_hc(request): return web.Response(text="OK")
