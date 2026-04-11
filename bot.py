@@ -130,7 +130,8 @@ async def cmd_stats(message: types.Message):
         exp = u.get("expire_date")
         date_s = exp.strftime('%d.%m.%Y') if exp else "Ожидает / Waiting"
         text = f"👤 {u.get('full_name', 'User')}\nID: `{u['user_id']}`\n📅 До: {date_s}"
-        kb = InlineKeyboardMarkup(inline_keyboard=}")]])
+        kb = InlineKeyboardMarkup(inline_keyboard=}")
+        ]])
         await message.answer(text, reply_markup=kb)
 
 @dp.callback_query(F.data.startswith("kick_"))
@@ -203,7 +204,8 @@ async def handle_receipt(message: types.Message):
 async def cb_decision(callback: types.CallbackQuery):
     if callback.from_user.id != CFG.admin_id: return
     parts = callback.data.split("_")
-    action, uid = parts[0], int(parts[1])
+    action = parts[0]
+    uid = int(parts[1])
     if action == "app":
         u_info = await bot.get_chat(uid)
         await subs_collection.update_one({"user_id": uid}, {"$set": {"username": u_info.username or "", "full_name": u_info.full_name or "", "status": "paid"}}, upsert=True)
