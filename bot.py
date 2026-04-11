@@ -166,6 +166,7 @@ async def check_sub(callback: types.CallbackQuery):
         except: await callback.message.answer("Ошибка доступа. / Access error.")
     await callback.answer()
 
+# Исправлено: добавлен фильтр приватного чата
 @dp.message(F.photo, F.chat.type == "private")
 async def handle_photo(message: types.Message):
     if message.from_user.id == CFG.admin_id:
@@ -183,9 +184,9 @@ async def handle_photo(message: types.Message):
 async def admin_decision(callback: types.CallbackQuery):
     if callback.from_user.id != CFG.admin_id: return
     
-    data_parts = callback.data.split("_")
-    action = data_parts[0]
-    uid = int(data_parts[1])
+    parts = callback.data.split("_")
+    action = parts[0]
+    uid = int(parts[1])
     
     if action == "ok":
         try:
@@ -200,9 +201,9 @@ async def admin_decision(callback: types.CallbackQuery):
             await bot.send_message(uid, f"✅ Одобрено! До: {expire.strftime('%d.%m.%Y')}\nСсылка: {link.invite_link}")
             await callback.message.edit_caption(caption=callback.message.caption + "\n\n✅ ОДОБРЕНО")
         except Exception as e:
-            log.error(f"Error in OK decision: {e}")
+            log.error(f"Error: {e}")
     elif action == "no":
-        await bot.send_message(uid, "❌ Оплата не подтверждена. / Payment not confirmed.")
+        await bot.send_message(uid, "❌ Оплата не подтверждена.")
         await callback.message.edit_caption(caption=callback.message.caption + "\n\n❌ ОТКЛОНЕНО")
     
     await callback.answer()
@@ -210,6 +211,11 @@ async def admin_decision(callback: types.CallbackQuery):
 async def main():
     await init_db()
     await set_bot_commands()
+    
+    # Исправлено: удаление вебхука для предотвращения конфликтов сессий
+    await bot.delete_webhook(drop_pending_updates=True)
+    log.info("Starting bot polling...")
+    
     asyncio.create_task(check_expirations())
     await dp.start_polling(bot)
 
