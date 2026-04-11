@@ -166,8 +166,10 @@ async def check_sub(callback: types.CallbackQuery):
         except: await callback.message.answer("Ошибка доступа. / Access error.")
     await callback.answer()
 
-@dp.message(F.photo)
+@dp.message(F.photo, F.chat.type == "private")
 async def handle_photo(message: types.Message):
+    if message.from_user.id == CFG.admin_id:
+        return
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="✅ Одобрить", callback_data=f"ok_{message.from_user.id}"),
         InlineKeyboardButton(text="❌ Отказать", callback_data=f"no_{message.from_user.id}")
@@ -180,8 +182,10 @@ async def handle_photo(message: types.Message):
 @dp.callback_query(F.data.startswith(("ok_", "no_")))
 async def admin_decision(callback: types.CallbackQuery):
     if callback.from_user.id != CFG.admin_id: return
+    
     data_parts = callback.data.split("_")
-    action, uid = data_parts[0], int(data_parts[1])
+    action = data_parts[0]
+    uid = int(data_parts[1])
     
     if action == "ok":
         try:
@@ -196,10 +200,11 @@ async def admin_decision(callback: types.CallbackQuery):
             await bot.send_message(uid, f"✅ Одобрено! До: {expire.strftime('%d.%m.%Y')}\nСсылка: {link.invite_link}")
             await callback.message.edit_caption(caption=callback.message.caption + "\n\n✅ ОДОБРЕНО")
         except Exception as e:
-            log.error(f"Error in OK: {e}")
+            log.error(f"Error in OK decision: {e}")
     elif action == "no":
         await bot.send_message(uid, "❌ Оплата не подтверждена. / Payment not confirmed.")
         await callback.message.edit_caption(caption=callback.message.caption + "\n\n❌ ОТКЛОНЕНО")
+    
     await callback.answer()
 
 async def main():
