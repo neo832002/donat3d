@@ -6,7 +6,8 @@ from datetime import datetime, timedelta
 
 from motor.motor_asyncio import AsyncIOMotorClient
 from aiogram import Bot, Dispatcher, F, types
-from aiogram.filters import Command
+from aiogram.filters import Command, ChatMemberUpdatedFilter
+from aiogram.filters.chat_member_updated import JOIN_TRANSITION
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand, BotCommandScopeChat, BotCommandScopeDefault
 
 @dataclass(frozen=True)
@@ -73,31 +74,34 @@ async def check_expirations():
                 except: pass
         await asyncio.sleep(3600)
 
-# --- Активация подписки при вступлении ---
+# --- Логика активации ПРИ ВСТУПЛЕНИИ (без заявки) ---
 
-@dp.chat_join_request()
-async def handle_join_request(update: types.ChatJoinRequest):
-    user = await subs_collection.find_one({"user_id": update.from_user.id})
+@dp.chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
+async def on_user_join(event: types.ChatMemberUpdated):
+    if event.chat.id != CFG.channel_id: return
     
+    uid = event.from_user.id
+    user = await subs_collection.find_one({"user_id": uid})
+    
+    # Если пользователь оплатил, но время еще не пошло
     if user and user.get("status") == "paid" and not user.get("expire_date"):
         expire = datetime.now() + timedelta(days=CFG.sub_days)
         await subs_collection.update_one(
-            {"user_id": update.from_user.id},
+            {"user_id": uid},
             {"$set": {"expire_date": expire, "status": "active"}}
         )
-        await update.approve()
-        await bot.send_message(update.from_user.id, 
-            f"✅ Доступ одобрен! До: {expire.strftime('%d.%m.%Y')}\n"
-            f"✅ Access approved! Until: {expire.strftime('%d.%m.%Y')}")
-    else:
-        await update.decline()
+        try:
+            await bot.send_message(uid, 
+                f"✅ Вы вступили в канал! Подписка активирована.\nДо: {expire.strftime('%d.%m.%Y')}\n\n"
+                f"✅ You joined the channel! Subscription activated.\nUntil: {expire.strftime('%d.%m.%Y')}")
+        except: pass
 
 # --- Обработчики Админа ---
 
 @dp.message(Command("clear_db"))
 async def cmd_clear_db(message: types.Message):
     if message.from_user.id != CFG.admin_id: return
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🧨 Очистить / Clear", callback_data="conf_clear")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=])
     await message.answer("Очистить базу данных? / Clear database?", reply_markup=kb)
 
 @dp.callback_query(F.data == "conf_clear")
@@ -116,9 +120,9 @@ async def cmd_stats(message: types.Message):
     
     for u in users:
         exp = u.get("expire_date")
-        date_s = exp.strftime('%d.%m.%Y') if exp else "Ожидает / Waiting"
+        date_s = exp.strftime('%d.%m.%Y') if exp else "Ожидает вступления / Waiting for join"
         text = f"👤 {u.get('full_name')}\nID: `{u['user_id']}`\n📅 До: {date_s}"
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Удалить / Kick", callback_data=f"kick_{u['user_id']}")]])
+        kb = InlineKeyboardMarkup(inline_keyboard=}")]])
         await message.answer(text, reply_markup=kb)
 
 @dp.callback_query(F.data.startswith("kick_"))
@@ -132,13 +136,11 @@ async def cb_kick(callback: types.CallbackQuery):
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     if message.from_user.id == CFG.admin_id:
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📊 Статистика / Stats", callback_data="admin_stats")]])
+        kb = InlineKeyboardMarkup(inline_keyboard=])
         await message.answer("🛠 Админ-панель / Admin panel:", reply_markup=kb)
         return
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Оплата / Payment", callback_data="pay")],
-        [InlineKeyboardButton(text="🔎 Моя подписка / My sub", callback_data="check_my_sub")]
+    kb = InlineKeyboardMarkup(inline_keyboard=,
     ])
     await message.answer("👋 Привет! Оплатите доступ и пришлите чек.\n👋 Hello! Pay for access and send a receipt.", reply_markup=kb)
 
@@ -159,13 +161,14 @@ async def check_user_sub(event: types.Message | types.CallbackQuery):
             if member.status in ["member", "administrator", "creator"]:
                 await msg.answer(f"✅ Активна до: {user['expire_date'].strftime('%d.%m.%Y')}\n✅ Active until: {user['expire_date'].strftime('%d.%m.%Y')}")
             else:
-                link = await bot.create_chat_invite_link(CFG.channel_id, creates_join_request=True)
+                # Генерируем новую одноразовую ссылку, если пользователь вышел
+                link = await bot.create_chat_invite_link(CFG.channel_id, member_limit=1)
                 await msg.answer(f"✅ Оплачено до {user['expire_date'].strftime('%d.%m.%Y')}, но вы вышли.\nСсылка: {link.invite_link}\n\n✅ Paid until {user['expire_date'].strftime('%d.%m.%Y')}, but you left.\nLink: {link.invite_link}")
         except:
             await msg.answer("Ошибка / Error")
     elif user.get("status") == "paid":
-        link = await bot.create_chat_invite_link(CFG.channel_id, creates_join_request=True)
-        await msg.answer(f"⏳ Оплата подтверждена. Вступите в канал:\n{link.invite_link}\n\n⏳ Payment confirmed. Join the channel:\n{link.invite_link}")
+        link = await bot.create_chat_invite_link(CFG.channel_id, member_limit=1)
+        await msg.answer(f"⏳ Оплата подтверждена. Просто вступите в канал по ссылке (время пойдет с момента вступления):\n{link.invite_link}\n\n⏳ Payment confirmed. Just join the channel (time starts from the moment you join):\n{link.invite_link}")
     
     if isinstance(event, types.CallbackQuery): await event.answer()
 
@@ -177,18 +180,15 @@ async def cb_pay(callback: types.CallbackQuery):
 @dp.message(F.photo, F.chat.type == "private")
 async def handle_receipt(message: types.Message):
     if message.from_user.id == CFG.admin_id: return
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Одобрить / Approve", callback_data=f"app_{message.from_user.id}"),
-        InlineKeyboardButton(text="❌ Отказать / Decline", callback_data=f"ref_{message.from_user.id}")
-    ]])
+    kb = InlineKeyboardMarkup(inline_keyboard=])
     await bot.send_photo(CFG.admin_id, message.photo[-1].file_id, caption=f"Чек от {message.from_user.full_name}\nID: `{message.from_user.id}`", reply_markup=kb)
     await message.answer("⏳ Ожидайте проверки. / Wait for verification.")
 
 @dp.callback_query(F.data.startswith(("app_", "ref_")))
 async def cb_decision(callback: types.CallbackQuery):
     if callback.from_user.id != CFG.admin_id: return
-    data_parts = callback.data.split("_")
-    action, uid = data_parts[0], int(data_parts[1])
+    parts = callback.data.split("_")
+    action, uid = parts[0], int(parts[1])
     
     if action == "app":
         u_info = await bot.get_chat(uid)
@@ -197,8 +197,8 @@ async def cb_decision(callback: types.CallbackQuery):
             {"$set": {"username": u_info.username or "", "full_name": u_info.full_name or "", "status": "paid"}}, 
             upsert=True
         )
-        link = await bot.create_chat_invite_link(chat_id=CFG.channel_id, creates_join_request=True)
-        await bot.send_message(uid, f"✅ Оплата принята! Вступите в канал (срок пойдет после вступления):\n{link.invite_link}\n\n✅ Payment accepted! Join the channel (time starts after joining):\n{link.invite_link}")
+        link = await bot.create_chat_invite_link(chat_id=CFG.channel_id, member_limit=1)
+        await bot.send_message(uid, f"✅ Оплата принята! Ссылка для входа:\n{link.invite_link}\n\n✅ Payment accepted! Join link:\n{link.invite_link}")
         await callback.message.edit_caption(caption="✅ ОДОБРЕНО / APPROVED")
     else:
         await bot.send_message(uid, "❌ Отказано. / Declined.")
