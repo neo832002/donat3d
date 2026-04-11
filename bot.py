@@ -42,7 +42,8 @@ async def set_bot_commands():
     await bot.set_my_commands(
         [
             BotCommand(command="start", description="🏠 Меню / Menu"),
-            BotCommand(command="stats", description="📊 Статистика / Stats")
+            BotCommand(command="stats", description="📊 Статистика / Stats"),
+            BotCommand(command="clear_db", description="🧨 Очистить базу / Clear DB")
         ],
         scope=BotCommandScopeChat(chat_id=CFG.admin_id)
     )
@@ -75,6 +76,22 @@ async def check_expirations():
 
 # --- Обработчики Админа ---
 
+@dp.message(Command("clear_db"))
+async def cmd_clear_db(message: types.Message):
+    if message.from_user.id != CFG.admin_id: return
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⚠️ Подтвердить удаление", callback_data="confirm_clear_db")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="close_stats")]
+    ])
+    await message.answer("Вы уверены, что хотите полностью очистить базу данных?", reply_markup=kb)
+
+@dp.callback_query(F.data == "confirm_clear_db")
+async def cb_confirm_clear(callback: types.CallbackQuery):
+    if callback.from_user.id != CFG.admin_id: return
+    await subs_collection.delete_many({})
+    await callback.message.edit_text("🧨 База данных полностью очищена.")
+    await callback.answer()
+
 async def show_statistics():
     cursor = subs_collection.find()
     users = await cursor.to_list(length=None)
@@ -85,7 +102,9 @@ async def show_statistics():
 
     await bot.send_message(CFG.admin_id, f"📊 Всего пользователей / Total: {len(users)}")
     for u in users:
-        date_str = u['expire_date'].strftime('%d.%m.%Y')
+        date_raw = u.get('expire_date')
+        date_str = date_raw.strftime('%d.%m.%Y') if date_raw else "не указана"
+        
         username = f"@{u['username']}" if u.get('username') else "none"
         text = f"👤 {u.get('full_name')}\n🔗 {username} | ID: `{u['user_id']}`\n📅 До: {date_str}"
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -127,7 +146,10 @@ async def terminate_sub(callback: types.CallbackQuery):
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     if message.from_user.id == CFG.admin_id:
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📊 Статистика / Stats", callback_data="admin_stats")]])
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📊 Статистика / Stats", callback_data="admin_stats")],
+            [InlineKeyboardButton(text="🧨 Очистить базу", callback_data="confirm_clear_db")]
+        ])
         await message.answer("Панель администратора / Admin panel:", reply_markup=kb)
         return
     
@@ -152,7 +174,7 @@ async def send_pay(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "check_sub")
 async def check_sub(callback: types.CallbackQuery):
     u = await subs_collection.find_one({"user_id": callback.from_user.id})
-    if not u or u["expire_date"] < datetime.now():
+    if not u or not u.get("expire_date") or u["expire_date"] < datetime.now():
         await callback.message.answer("❌ Нет активной подписки. / No active subscription.")
     else:
         date_s = u['expire_date'].strftime('%d.%m.%Y')
@@ -166,7 +188,6 @@ async def check_sub(callback: types.CallbackQuery):
         except: await callback.message.answer("Ошибка доступа. / Access error.")
     await callback.answer()
 
-# Исправлено: добавлен фильтр приватного чата
 @dp.message(F.photo, F.chat.type == "private")
 async def handle_photo(message: types.Message):
     if message.from_user.id == CFG.admin_id:
@@ -185,8 +206,7 @@ async def admin_decision(callback: types.CallbackQuery):
     if callback.from_user.id != CFG.admin_id: return
     
     parts = callback.data.split("_")
-    action = parts[0]
-    uid = int(parts[1])
+    action, uid = parts[0], int(parts[1])
     
     if action == "ok":
         try:
@@ -194,7 +214,11 @@ async def admin_decision(callback: types.CallbackQuery):
             expire = datetime.now() + timedelta(days=CFG.sub_days)
             await subs_collection.update_one(
                 {"user_id": uid}, 
-                {"$set": {"username": u_info.username or "", "full_name": u_info.full_name or "", "expire_date": expire}}, 
+                {"$set": {
+                    "username": u_info.username or "", 
+                    "full_name": u_info.full_name or "", 
+                    "expire_date": expire
+                }}, 
                 upsert=True
             )
             link = await bot.create_chat_invite_link(chat_id=CFG.channel_id, member_limit=1)
@@ -211,13 +235,10 @@ async def admin_decision(callback: types.CallbackQuery):
 async def main():
     await init_db()
     await set_bot_commands()
-    
-    # Исправлено: удаление вебхука для предотвращения конфликтов сессий
     await bot.delete_webhook(drop_pending_updates=True)
     log.info("Starting bot polling...")
-    
     asyncio.create_task(check_expirations())
-    await dp.start_polling(bot)
+    await dp.start_polling(bot, skip_updates=True)
 
 if __name__ == "__main__":
     asyncio.run(main())
