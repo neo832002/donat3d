@@ -8,11 +8,10 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand, BotCommandScopeChat, BotCommandScopeDefault
-from aiohttp import web
 
 @dataclass(frozen=True)
 class Config:
-    token: str = "8527322806:AAE570ZADxH89_9bDyNWO2JZ9WqEYJvjvJQ"
+    token: str = "8527322806:AAFwNdIeXi2mdbIB7duY3rWoyHXxhL7Q9Pg"
     admin_id: int = 942900279
     channel_id: int = -1003581309063
     db_url: str = os.getenv("MONGODB_URI")
@@ -36,12 +35,10 @@ dp = Dispatcher()
 # --- Системные настройки ---
 
 async def set_bot_commands():
-    # Подсказки для всех (Default)
     await bot.set_my_commands(
         [BotCommand(command="start", description="🏠 Главное меню / Main menu")],
         scope=BotCommandScopeDefault()
     )
-    # Подсказки для Админа
     await bot.set_my_commands(
         [
             BotCommand(command="start", description="🏠 Меню / Menu"),
@@ -183,38 +180,32 @@ async def handle_photo(message: types.Message):
 @dp.callback_query(F.data.startswith(("ok_", "no_")))
 async def admin_decision(callback: types.CallbackQuery):
     if callback.from_user.id != CFG.admin_id: return
-    action, uid = callback.data.split("_")[0], int(callback.data.split("_")[1])
+    data_parts = callback.data.split("_")
+    action, uid = data_parts[0], int(data_parts[1])
     
     if action == "ok":
-        u_info = await bot.get_chat(uid)
-        expire = datetime.now() + timedelta(days=CFG.sub_days)
-        await subs_collection.update_one({"user_id": uid}, {"$set": {"username": u_info.username or "", "full_name": u_info.full_name or "", "expire_date": expire}}, upsert=True)
-        link = await bot.create_chat_invite_link(chat_id=CFG.channel_id, member_limit=1)
-        await bot.send_message(uid, f"✅ Одобрено! До: {expire.strftime('%d.%m.%Y')}\nLink: {link.invite_link}")
-    else:
-        await bot.send_message(uid, "❌ Ваш чек отклонен. / Your receipt was declined.")
-    
-    try: await callback.message.delete()
-    except: pass
+        try:
+            u_info = await bot.get_chat(uid)
+            expire = datetime.now() + timedelta(days=CFG.sub_days)
+            await subs_collection.update_one(
+                {"user_id": uid}, 
+                {"$set": {"username": u_info.username or "", "full_name": u_info.full_name or "", "expire_date": expire}}, 
+                upsert=True
+            )
+            link = await bot.create_chat_invite_link(chat_id=CFG.channel_id, member_limit=1)
+            await bot.send_message(uid, f"✅ Одобрено! До: {expire.strftime('%d.%m.%Y')}\nСсылка: {link.invite_link}")
+            await callback.message.edit_caption(caption=callback.message.caption + "\n\n✅ ОДОБРЕНО")
+        except Exception as e:
+            log.error(f"Error in OK: {e}")
+    elif action == "no":
+        await bot.send_message(uid, "❌ Оплата не подтверждена. / Payment not confirmed.")
+        await callback.message.edit_caption(caption=callback.message.caption + "\n\n❌ ОТКЛОНЕНО")
     await callback.answer()
-
-# --- Запуск ---
-
-async def handle_hc(request): return web.Response(text="OK")
 
 async def main():
     await init_db()
     await set_bot_commands()
-    
-    # Удаляем вебхуки и старые запросы для предотвращения Conflict Error
-    await bot.delete_webhook(drop_pending_updates=True)
-    
-    app = web.Application(); app.router.add_get("/", handle_hc)
-    runner = web.AppRunner(app); await runner.setup()
-    await web.TCPSite(runner, "0.0.0.0", CFG.port).start()
-
     asyncio.create_task(check_expirations())
-    log.info("Bot started successfully")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
