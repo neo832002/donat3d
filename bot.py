@@ -62,8 +62,7 @@ async def cmd_start(message: types.Message):
         kb = InlineKeyboardMarkup(inline_keyboard=btn)
         await message.answer("Добро пожаловать, админ!", reply_markup=kb)
     else:
-        btn =,
-        ]
+        btn =]
         kb = InlineKeyboardMarkup(inline_keyboard=btn)
         await message.answer(f"👋 Привет! Подписка на 30 дней.\n💰 Стоимость: **{CFG.price_ru}** или **{CFG.price_paypal}**.\n\n👋 Hello! Subscription for 30 days.\n💰 Price: **{CFG.price_ru}** or **{CFG.price_paypal}**.", reply_markup=kb, parse_mode="Markdown")
 
