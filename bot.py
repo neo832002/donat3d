@@ -103,12 +103,12 @@ async def show_stats_logic(chat_id: int):
         date_s = exp.strftime('%d.%m.%Y') if exp else "Ожидает / Waiting"
         text = f"👤 {name}\nID: `{uid}`\n📅 До: {date_s}"
         kb = InlineKeyboardMarkup(inline_keyboard=
-        ])
+       [ ])
         await bot.send_message(chat_id, text, reply_markup=kb)
 
 async def clear_db_logic(chat_id: int):
     kb = InlineKeyboardMarkup(inline_keyboard=
-    ])
+    [])
     await bot.send_message(chat_id, "🧨 ВНИМАНИЕ! Очистить базу данных? Это удалит всех пользователей из базы.", reply_markup=kb)
 
 @dp.chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
