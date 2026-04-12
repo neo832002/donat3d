@@ -87,11 +87,21 @@ async def show_stats_logic(chat_id: int):
         await bot.send_message(chat_id, "База пуста. / DB empty.")
         return
     for u in users:
+        uid = u["user_id"]
+        # Пытаемся получить имя из БД, если нет - запрашиваем у ТГ
+        name = u.get("full_name")
+        if not name:
+            try:
+                chat = await bot.get_chat(uid)
+                name = chat.full_name
+            except:
+                name = "Unknown"
+        
         exp = u.get("expire_date")
         date_s = exp.strftime('%d.%m.%Y') if exp else "Ожидает / Waiting"
-        text = f"👤 {u.get('full_name', 'User')}\nID: `{u['user_id']}`\n📅 До: {date_s}"
+        text = f"👤 {name}\nID: `{uid}`\n📅 До: {date_s}"
         kb = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="❌ Удалить / Kick", callback_data=f"kick_{u['user_id']}")
+            InlineKeyboardButton(text="❌ Удалить / Kick", callback_data=f"kick_{uid}")
         ]])
         await bot.send_message(chat_id, text, reply_markup=kb)
 
