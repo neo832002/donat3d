@@ -88,14 +88,16 @@ async def show_stats_logic(chat_id: int):
         return
     for u in users:
         uid = u["user_id"]
-        # Пытаемся получить имя из БД, если нет - запрашиваем у ТГ
+        # Пытаемся получить имя
         name = u.get("full_name")
         if not name:
             try:
-                chat = await bot.get_chat(uid)
-                name = chat.full_name
+                chat_info = await bot.get_chat(uid)
+                name = chat_info.full_name
+                # Сразу обновляем в базе, чтобы в след. раз не дергать API
+                await subs_collection.update_one({"user_id": uid}, {"$set": {"full_name": name}})
             except:
-                name = "Unknown"
+                name = f"User_{uid}"
         
         exp = u.get("expire_date")
         date_s = exp.strftime('%d.%m.%Y') if exp else "Ожидает / Waiting"
@@ -223,11 +225,22 @@ async def handle_receipt(message: types.Message):
 @dp.callback_query(F.data.startswith(("app_", "ref_")))
 async def cb_decision(callback: types.CallbackQuery):
     if callback.from_user.id != CFG.admin_id: return
-    action, uid = callback.data.split("_")
-    uid = int(uid)
+    data_parts = callback.data.split("_")
+    action = data_parts[0]
+    uid = int(data_parts[1])
+    
     if action == "app":
         u_info = await bot.get_chat(uid)
-        await subs_collection.update_one({"user_id": uid}, {"$set": {"username": u_info.username or "", "full_name": u_info.full_name or "", "status": "paid"}}, upsert=True)
+        # СОХРАНЯЕМ ИМЯ ПРИ ОДОБРЕНИИ
+        await subs_collection.update_one(
+            {"user_id": uid}, 
+            {"$set": {
+                "username": u_info.username or "", 
+                "full_name": u_info.full_name or "User", 
+                "status": "paid"
+            }}, 
+            upsert=True
+        )
         link = await bot.create_chat_invite_link(chat_id=CFG.channel_id, member_limit=1)
         await bot.send_message(uid, f"✅ Одобрено! Ссылка:\n{link.invite_link}")
         await callback.message.edit_caption(caption="✅ ОДОБРЕНО / APPROVED")
