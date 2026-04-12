@@ -79,7 +79,7 @@ async def check_expirations():
                 except: pass
         await asyncio.sleep(3600)
 
-# --- Логика статистики и очистки (вынесена отдельно) ---
+# --- Логика статистики и очистки ---
 async def show_stats_logic(chat_id: int):
     cursor = subs_collection.find()
     users = await cursor.to_list(length=None)
@@ -135,7 +135,7 @@ async def cmd_stats(message: types.Message):
 @dp.callback_query(F.data.startswith("kick_"))
 async def cb_kick(callback: types.CallbackQuery):
     if callback.from_user.id == CFG.admin_id:
-        uid = int(callback.data.split("_")[1])
+        uid = int(callback.data.split("_"))
         if await kick_user(uid):
             await callback.message.edit_text("✅ Пользователь удален.")
     await callback.answer()
@@ -156,7 +156,6 @@ async def cmd_start(message: types.Message):
         ])
         await message.answer("👋 Оплатите доступ и пришлите чек.", reply_markup=kb)
 
-# Кнопки админа в меню
 @dp.callback_query(F.data == "admin_stats_call")
 async def cb_admin_stats(callback: types.CallbackQuery):
     if callback.from_user.id == CFG.admin_id:
@@ -193,7 +192,13 @@ async def check_user_sub(event: types.Message | types.CallbackQuery):
 
 @dp.callback_query(F.data == "pay")
 async def cb_pay(callback: types.CallbackQuery):
-    await callback.message.answer(f"💳 РФ: `{CFG.pay_ru}`\n🅿️ PayPal: `{CFG.pay_paypal}`\nПосле оплаты пришлите фото чека.")
+    # Добавлены обратные кавычки для PayPal адреса (parse_mode HTML/Markdown в aiogram по умолчанию подхватывает их)
+    await callback.message.answer(
+        f"💳 РФ: `{CFG.pay_ru}`\n"
+        f"🅿️ PayPal: `{CFG.pay_paypal}`\n\n"
+        f"После оплаты пришлите фото чека.", 
+        parse_mode="Markdown"
+    )
     await callback.answer()
 
 @dp.message(F.photo, F.chat.type == ChatType.PRIVATE)
@@ -204,7 +209,7 @@ async def handle_receipt(message: types.Message):
         [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"ref_{message.from_user.id}")]
     ])
     await bot.send_photo(CFG.admin_id, message.photo[-1].file_id, caption=f"Чек от {message.from_user.full_name}\nID: `{message.from_user.id}`", reply_markup=kb)
-    await message.answer("🧨 Чек отправлен на проверку.")
+    await message.answer("🧨 Чек отправлен на проверке.")
 
 @dp.callback_query(F.data.startswith(("app_", "ref_")))
 async def cb_decision(callback: types.CallbackQuery):
