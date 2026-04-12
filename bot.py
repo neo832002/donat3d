@@ -15,7 +15,6 @@ from aiohttp import web
 class Config:
     token: str = "8527322806:AAFwNdIeXi2mdbIB7duY3rWoyHXxhL7Q9Pg"
     admin_id: int = 942900279
-    # Ваш юзернейм для связи
     admin_username: str = "neo832002" 
     channel_id: int = -1003581309063
     db_url: str = os.getenv("MONGODB_URI")
@@ -109,7 +108,7 @@ async def show_stats_logic(chat_id: int):
 
 async def clear_db_logic(chat_id: int):
     kb = InlineKeyboardMarkup(inline_keyboard=])
-    await bot.send_message(chat_id, "🧨 Очистить базу данных? / Clear DB?", reply_markup=kb)
+    await bot.send_message(chat_id, "🧨 ВНИМАНИЕ! Очистить базу данных? Это удалит всех пользователей из базы.", reply_markup=kb)
 
 # --- Subscription activation ---
 @dp.chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
@@ -134,7 +133,7 @@ async def cmd_clear_db(message: types.Message):
 async def cb_clear(callback: types.CallbackQuery):
     if callback.from_user.id == CFG.admin_id:
         await subs_collection.delete_many({})
-        await callback.message.edit_text("✅ База пуста. / DB empty.")
+        await callback.message.edit_text("✅ База полностью очищена.")
     await callback.answer()
 
 @dp.message(Command("stats"), F.chat.type == ChatType.PRIVATE)
@@ -147,14 +146,15 @@ async def cb_kick(callback: types.CallbackQuery):
     if callback.from_user.id == CFG.admin_id:
         uid = int(callback.data.split("_")[1])
         if await kick_user(uid):
-            await callback.message.edit_text("✅ Удален. / Kicked.")
+            await callback.message.edit_text("✅ Удален из базы и канала.")
     await callback.answer()
 
 # --- User Handlers ---
 @dp.message(Command("start"), F.chat.type == ChatType.PRIVATE)
 async def cmd_start(message: types.Message):
     if message.from_user.id == CFG.admin_id:
-        kb = InlineKeyboardMarkup(inline_keyboard=,
+        # Убрана кнопка очистки базы, оставлена только Статистика
+        kb = InlineKeyboardMarkup(inline_keyboard=
         ])
         await message.answer("🛠 Админ-панель / Admin panel:", reply_markup=kb)
     else:
@@ -174,12 +174,6 @@ async def cb_admin_stats(callback: types.CallbackQuery):
         await show_stats_logic(callback.message.chat.id)
     await callback.answer()
 
-@dp.callback_query(F.data == "admin_clear_call")
-async def cb_admin_clear(callback: types.CallbackQuery):
-    if callback.from_user.id == CFG.admin_id:
-        await clear_db_logic(callback.message.chat.id)
-    await callback.answer()
-
 @dp.message(Command("my_sub"), F.chat.type == ChatType.PRIVATE)
 @dp.callback_query(F.data == "check_my_sub")
 async def check_user_sub(event: types.Message | types.CallbackQuery):
@@ -196,7 +190,7 @@ async def check_user_sub(event: types.Message | types.CallbackQuery):
             else:
                 link = await bot.create_chat_invite_link(CFG.channel_id, member_limit=1)
                 await msg.answer(f"✅ Оплачено до {user['expire_date'].strftime('%d.%m.%Y')}, но вы вышли.\nСсылка: {link.invite_link}")
-        except: await msg.answer("Ошибка / Error")
+        except: await msg.answer("Ошибка проверки.")
     elif user.get("status") == "paid":
         link = await bot.create_chat_invite_link(CFG.channel_id, member_limit=1)
         await msg.answer(f"🧨 Оплата подтверждена! Вступите в канал:\n{link.invite_link}")
@@ -210,7 +204,7 @@ async def cb_pay(callback: types.CallbackQuery):
         f"💰 Цена / Price: {CFG.price_ru} | {CFG.price_usd}\n\n"
         f"💳 РФ: `{CFG.pay_ru}`\n"
         f"🅿️ PayPal: `{CFG.pay_paypal}`\n\n"
-        f"Пришлите фото чека в этот чат или администратору.",
+        f"Пришлите фото чека в этот чат.",
         parse_mode="Markdown",
         reply_markup=kb
     )
@@ -222,14 +216,13 @@ async def handle_receipt(message: types.Message):
     kb = InlineKeyboardMarkup(inline_keyboard=,
     ])
     await bot.send_photo(CFG.admin_id, message.photo[-1].file_id, caption=f"Чек от {message.from_user.full_name}\nID: `{message.from_user.id}`", reply_markup=kb)
-    await message.answer("🧨 Чек на проверке. / Receipt in verification.")
+    await message.answer("🧨 Чек на проверке. Ожидайте подтверждения.")
 
 @dp.callback_query(F.data.startswith(("app_", "ref_")))
 async def cb_decision(callback: types.CallbackQuery):
     if callback.from_user.id != CFG.admin_id: return
-    data_parts = callback.data.split("_")
-    action = data_parts[0]
-    uid = int(data_parts[1])
+    action, uid = callback.data.split("_")
+    uid = int(uid)
     
     if action == "app":
         u_info = await bot.get_chat(uid)
@@ -243,11 +236,11 @@ async def cb_decision(callback: types.CallbackQuery):
             upsert=True
         )
         link = await bot.create_chat_invite_link(chat_id=CFG.channel_id, member_limit=1)
-        await bot.send_message(uid, f"✅ Одобрено! Ссылка:\n{link.invite_link}")
-        await callback.message.edit_caption(caption="✅ ОДОБРЕНО / APPROVED")
+        await bot.send_message(uid, f"✅ Одобрено! Ссылка для входа:\n{link.invite_link}")
+        await callback.message.edit_caption(caption="✅ ОДОБРЕНО")
     else:
-        await bot.send_message(uid, "❌ Отказано. / Declined.")
-        await callback.message.edit_caption(caption="❌ ОТКЛОНЕНО / DECLINED")
+        await bot.send_message(uid, "❌ Ваш чек был отклонен администратором.")
+        await callback.message.edit_caption(caption="❌ ОТКЛОНЕНО")
     await callback.answer()
 
 async def main():
