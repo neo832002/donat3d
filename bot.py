@@ -79,6 +79,28 @@ async def check_expirations():
                 except: pass
         await asyncio.sleep(3600)
 
+# --- Логика статистики и очистки (вынесена отдельно) ---
+async def show_stats_logic(chat_id: int):
+    cursor = subs_collection.find()
+    users = await cursor.to_list(length=None)
+    if not users:
+        await bot.send_message(chat_id, "База пользователей пуста.")
+        return
+    for u in users:
+        exp = u.get("expire_date")
+        date_s = exp.strftime('%d.%m.%Y') if exp else "Ожидает входа"
+        text = f"👤 {u.get('full_name', 'User')}\nID: `{u['user_id']}`\n📅 До: {date_s}"
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="❌ Удалить", callback_data=f"kick_{u['user_id']}")
+        ]])
+        await bot.send_message(chat_id, text, reply_markup=kb)
+
+async def clear_db_logic(chat_id: int):
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🧨 Подтвердить очистку", callback_data="conf_clear")
+    ]])
+    await bot.send_message(chat_id, "🧨 Очистить базу данных?", reply_markup=kb)
+
 # --- Активация подписки ---
 @dp.chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
 async def on_user_join(event: types.ChatMemberUpdated):
@@ -95,64 +117,56 @@ async def on_user_join(event: types.ChatMemberUpdated):
 # --- Обработчики Админа ---
 @dp.message(Command("clear_db"), F.chat.type == ChatType.PRIVATE)
 async def cmd_clear_db(message: types.Message):
-    if message.from_user.id != CFG.admin_id: return
-    kb = InlineKeyboardMarkup(inline_keyboard=])
-    await message.answer("🧨 Очистить базу данных?", reply_markup=kb)
+    if message.from_user.id == CFG.admin_id:
+        await clear_db_logic(message.chat.id)
 
 @dp.callback_query(F.data == "conf_clear")
 async def cb_clear(callback: types.CallbackQuery):
-    if callback.from_user.id != CFG.admin_id: return
-    await subs_collection.delete_many({})
-    await callback.message.edit_text("✅ База полностью очищена.")
+    if callback.from_user.id == CFG.admin_id:
+        await subs_collection.delete_many({})
+        await callback.message.edit_text("✅ База полностью очищена.")
     await callback.answer()
 
 @dp.message(Command("stats"), F.chat.type == ChatType.PRIVATE)
 async def cmd_stats(message: types.Message):
-    if message.from_user.id != CFG.admin_id: return
-    cursor = subs_collection.find()
-    users = await cursor.to_list(length=None)
-    if not users:
-        await message.answer("База пользователей пуста.")
-        return
-    for u in users:
-        exp = u.get("expire_date")
-        date_s = exp.strftime('%d.%m.%Y') if exp else "Ожидает входа"
-        text = f"👤 {u.get('full_name', 'User')}\nID: `{u['user_id']}`\n📅 До: {date_s}"
-        kb = InlineKeyboardMarkup(inline_keyboard=}")
-        ]])
-        await message.answer(text, reply_markup=kb)
+    if message.from_user.id == CFG.admin_id:
+        await show_stats_logic(message.chat.id)
 
 @dp.callback_query(F.data.startswith("kick_"))
 async def cb_kick(callback: types.CallbackQuery):
-    if callback.from_user.id != CFG.admin_id: return
-    uid = int(callback.data.split("_")[1])
-    if await kick_user(uid):
-        await callback.message.edit_text("✅ Пользователь удален.")
+    if callback.from_user.id == CFG.admin_id:
+        uid = int(callback.data.split("_")[1])
+        if await kick_user(uid):
+            await callback.message.edit_text("✅ Пользователь удален.")
     await callback.answer()
 
 # --- Пользовательские обработчики ---
 @dp.message(Command("start"), F.chat.type == ChatType.PRIVATE)
 async def cmd_start(message: types.Message):
     if message.from_user.id == CFG.admin_id:
-        # Кнопки админа теперь вызывают соответствующие команды
-        kb = InlineKeyboardMarkup(inline_keyboard=,
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats_call")],
+            [InlineKeyboardButton(text="🧨 Очистить базу", callback_data="admin_clear_call")]
         ])
         await message.answer("🛠 Админ-панель:", reply_markup=kb)
-        return
-    
-    kb = InlineKeyboardMarkup(inline_keyboard=,
-    ])
-    await message.answer("👋 Оплатите доступ и пришлите чек.", reply_markup=kb)
+    else:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Оплатить", callback_data="pay")],
+            [InlineKeyboardButton(text="🔎 Моя подписка", callback_data="check_my_sub")]
+        ])
+        await message.answer("👋 Оплатите доступ и пришлите чек.", reply_markup=kb)
 
-# Обработка нажатия кнопок админа в меню
-@dp.callback_query(F.data == "admin_stats")
+# Кнопки админа в меню
+@dp.callback_query(F.data == "admin_stats_call")
 async def cb_admin_stats(callback: types.CallbackQuery):
-    await cmd_stats(callback.message)
+    if callback.from_user.id == CFG.admin_id:
+        await show_stats_logic(callback.message.chat.id)
     await callback.answer()
 
-@dp.callback_query(F.data == "admin_clear")
+@dp.callback_query(F.data == "admin_clear_call")
 async def cb_admin_clear(callback: types.CallbackQuery):
-    await cmd_clear_db(callback.message)
+    if callback.from_user.id == CFG.admin_id:
+        await clear_db_logic(callback.message.chat.id)
     await callback.answer()
 
 @dp.message(Command("my_sub"), F.chat.type == ChatType.PRIVATE)
@@ -185,7 +199,9 @@ async def cb_pay(callback: types.CallbackQuery):
 @dp.message(F.photo, F.chat.type == ChatType.PRIVATE)
 async def handle_receipt(message: types.Message):
     if message.from_user.id == CFG.admin_id: return
-    kb = InlineKeyboardMarkup(inline_keyboard=,
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Одобрить", callback_data=f"app_{message.from_user.id}")],
+        [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"ref_{message.from_user.id}")]
     ])
     await bot.send_photo(CFG.admin_id, message.photo[-1].file_id, caption=f"Чек от {message.from_user.full_name}\nID: `{message.from_user.id}`", reply_markup=kb)
     await message.answer("🧨 Чек отправлен на проверку.")
