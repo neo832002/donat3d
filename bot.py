@@ -200,7 +200,7 @@ async def check_user_sub(event: types.Message | types.CallbackQuery):
 @dp.callback_query(F.data == "pay")
 async def cb_pay(callback: types.CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=
-    ])
+    [ ])
     await callback.message.answer(
         f"💰 Цена / Price: {CFG.price_ru} | {CFG.price_usd}\n\n"
         f"💳 РФ: `{CFG.pay_ru}`\n"
@@ -215,7 +215,7 @@ async def cb_pay(callback: types.CallbackQuery):
 async def handle_receipt(message: types.Message):
     if message.from_user.id == CFG.admin_id: return
     kb = InlineKeyboardMarkup(inline_keyboard=
-    ])
+   [ ])
     await bot.send_photo(CFG.admin_id, message.photo[-1].file_id, 
                          caption=f"Чек от {message.from_user.full_name}\nID: `{message.from_user.id}`", 
                          reply_markup=kb)
