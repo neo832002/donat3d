@@ -154,11 +154,11 @@ async def cb_kick(callback: types.CallbackQuery):
 async def cmd_start(message: types.Message):
     if message.from_user.id == CFG.admin_id:
         kb = InlineKeyboardMarkup(inline_keyboard=,
-        ])
+       [ ])
         await message.answer("🛠 Админ-панель / Admin panel:", reply_markup=kb)
     else:
         kb = InlineKeyboardMarkup(inline_keyboard=,
-        ])
+       [ ])
         text = (
             f"👋 Доступ в канал стоит **{CFG.price_ru}** или **{CFG.price_usd}** за {CFG.sub_days} дней.\n"
             f"👋 Оплатите и пришлите чек.\n\n"
