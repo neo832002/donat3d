@@ -145,7 +145,8 @@ async def cmd_stats(message: types.Message):
 @dp.callback_query(F.data.startswith("kick_"))
 async def cb_kick(callback: types.CallbackQuery):
  if callback.from_user.id == CFG.admin_id:
-  uid = int(callback.data.split("_")[1])
+  uid_parts = callback.data.split("_")
+  uid = int(uid_parts[1])
   if await kick_user(uid):
    await callback.message.edit_text("✅ Удален из базы и канала.")
   await callback.answer()
