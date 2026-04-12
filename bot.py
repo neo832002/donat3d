@@ -36,7 +36,6 @@ subs_collection = db.subs
 bot = Bot(token=CFG.token)
 dp = Dispatcher()
 
-# --- HTTP server for Render ---
 async def handle_ping(request):
     return web.Response(text="Bot is alive")
 
@@ -48,7 +47,6 @@ async def run_http_server():
     site = web.TCPSite(runner, "0.0.0.0", CFG.port)
     await site.start()
 
-# --- System functions ---
 async def set_bot_commands():
     await bot.set_my_commands([
         BotCommand(command="start", description="🏠 Меню / Menu"),
@@ -85,7 +83,6 @@ async def check_expirations():
                     pass
         await asyncio.sleep(3600)
 
-# --- Stats and Clear logic ---
 async def show_stats_logic(chat_id: int):
     cursor = subs_collection.find()
     users = await cursor.to_list(length=None)
@@ -105,18 +102,15 @@ async def show_stats_logic(chat_id: int):
         exp = u.get("expire_date")
         date_s = exp.strftime('%d.%m.%Y') if exp else "Ожидает / Waiting"
         text = f"👤 {name}\nID: `{uid}`\n📅 До: {date_s}"
-        # Исправлено: вложенные списки [] внутри InlineKeyboardMarkup()
         kb = InlineKeyboardMarkup(inline_keyboard=
-        )
+        ])
         await bot.send_message(chat_id, text, reply_markup=kb)
 
 async def clear_db_logic(chat_id: int):
-    # Исправлено: вложенные списки [] внутри InlineKeyboardMarkup()
     kb = InlineKeyboardMarkup(inline_keyboard=
     ])
     await bot.send_message(chat_id, "🧨 ВНИМАНИЕ! Очистить базу данных? Это удалит всех пользователей из базы.", reply_markup=kb)
 
-# --- Subscription activation ---
 @dp.chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
 async def on_user_join(event: types.ChatMemberUpdated):
     if event.chat.id != CFG.channel_id: return
@@ -130,7 +124,6 @@ async def on_user_join(event: types.ChatMemberUpdated):
         except: 
             pass
 
-# --- Admin Handlers ---
 @dp.message(Command("clear_db"), F.chat.type == ChatType.PRIVATE)
 async def cmd_clear_db(message: types.Message):
     if message.from_user.id == CFG.admin_id:
@@ -151,23 +144,19 @@ async def cmd_stats(message: types.Message):
 @dp.callback_query(F.data.startswith("kick_"))
 async def cb_kick(callback: types.CallbackQuery):
     if callback.from_user.id == CFG.admin_id:
-        # Исправлено: извлечение ID
         uid_parts = callback.data.split("_")
         uid = int(uid_parts[1])
         if await kick_user(uid):
             await callback.message.edit_text("✅ Удален из базы и канала.")
         await callback.answer()
 
-# --- User Handlers ---
 @dp.message(Command("start"), F.chat.type == ChatType.PRIVATE)
 async def cmd_start(message: types.Message):
     if message.from_user.id == CFG.admin_id:
-        # Исправлено: вложенные списки [] внутри InlineKeyboardMarkup()
         kb = InlineKeyboardMarkup(inline_keyboard=,
         ])
         await message.answer("🛠 Админ-панель / Admin panel:", reply_markup=kb)
     else:
-        # Исправлено: вложенные списки [] внутри InlineKeyboardMarkup()
         kb = InlineKeyboardMarkup(inline_keyboard=,
         ])
         text = (
@@ -210,7 +199,6 @@ async def check_user_sub(event: types.Message | types.CallbackQuery):
 
 @dp.callback_query(F.data == "pay")
 async def cb_pay(callback: types.CallbackQuery):
-    # Исправлено: вложенные списки [] внутри InlineKeyboardMarkup()
     kb = InlineKeyboardMarkup(inline_keyboard=
     ])
     await callback.message.answer(
@@ -226,7 +214,6 @@ async def cb_pay(callback: types.CallbackQuery):
 @dp.message(F.photo, F.chat.type == ChatType.PRIVATE)
 async def handle_receipt(message: types.Message):
     if message.from_user.id == CFG.admin_id: return
-    # Исправлено: вложенные списки [] внутри InlineKeyboardMarkup()
     kb = InlineKeyboardMarkup(inline_keyboard=
     ])
     await bot.send_photo(CFG.admin_id, message.photo[-1].file_id, 
