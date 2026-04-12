@@ -18,6 +18,10 @@ class Config:
     channel_id: int = -1003581309063
     db_url: str = os.getenv("MONGODB_URI")
     sub_days: int = 30
+    # Переменные цены
+    price_ru: str = "400 руб"
+    price_usd: str = "4$"
+    # Реквизиты
     pay_ru: str = "2204120115044840"
     pay_paypal: str = "neo832002@yahoo.com"
     port: int = int(os.getenv("PORT", 10000))
@@ -88,13 +92,11 @@ async def show_stats_logic(chat_id: int):
         return
     for u in users:
         uid = u["user_id"]
-        # Пытаемся получить имя
         name = u.get("full_name")
         if not name:
             try:
                 chat_info = await bot.get_chat(uid)
                 name = chat_info.full_name
-                # Сразу обновляем в базе, чтобы в след. раз не дергать API
                 await subs_collection.update_one({"user_id": uid}, {"$set": {"full_name": name}})
             except:
                 name = f"User_{uid}"
@@ -102,15 +104,11 @@ async def show_stats_logic(chat_id: int):
         exp = u.get("expire_date")
         date_s = exp.strftime('%d.%m.%Y') if exp else "Ожидает / Waiting"
         text = f"👤 {name}\nID: `{uid}`\n📅 До: {date_s}"
-        kb = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="❌ Удалить / Kick", callback_data=f"kick_{uid}")
-        ]])
+        kb = InlineKeyboardMarkup(inline_keyboard=])
         await bot.send_message(chat_id, text, reply_markup=kb)
 
 async def clear_db_logic(chat_id: int):
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🧨 Очистить / Clear", callback_data="conf_clear")
-    ]])
+    kb = InlineKeyboardMarkup(inline_keyboard=])
     await bot.send_message(chat_id, "🧨 Очистить базу данных? / Clear DB?", reply_markup=kb)
 
 # --- Subscription activation ---
@@ -156,17 +154,20 @@ async def cb_kick(callback: types.CallbackQuery):
 @dp.message(Command("start"), F.chat.type == ChatType.PRIVATE)
 async def cmd_start(message: types.Message):
     if message.from_user.id == CFG.admin_id:
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📊 Статистика / Stats", callback_data="admin_stats_call")],
-            [InlineKeyboardButton(text="🧨 Очистить базу / Clear DB", callback_data="admin_clear_call")]
+        kb = InlineKeyboardMarkup(inline_keyboard=,
         ])
         await message.answer("🛠 Админ-панель / Admin panel:", reply_markup=kb)
     else:
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Оплатить / Pay", callback_data="pay")],
-            [InlineKeyboardButton(text="🔎 Моя подписка / My sub", callback_data="check_my_sub")]
+        kb = InlineKeyboardMarkup(inline_keyboard=,
         ])
-        await message.answer("👋 Оплатите доступ и пришлите чек.\n👋 Pay for access and send a receipt.", reply_markup=kb)
+        # Добавление стоимости в приветственное сообщение
+        text = (
+            f"👋 Доступ в канал стоит **{CFG.price_ru}** или **{CFG.price_usd}** за {CFG.sub_days} дней.\n"
+            f"👋 Оплатите и пришлите чек.\n\n"
+            f"👋 Access costs **{CFG.price_ru}** or **{CFG.price_usd}** for {CFG.sub_days} days.\n"
+            f"👋 Pay for access and send a receipt."
+        )
+        await message.answer(text, reply_markup=kb, parse_mode="Markdown")
 
 @dp.callback_query(F.data == "admin_stats_call")
 async def cb_admin_stats(callback: types.CallbackQuery):
@@ -205,6 +206,7 @@ async def check_user_sub(event: types.Message | types.CallbackQuery):
 @dp.callback_query(F.data == "pay")
 async def cb_pay(callback: types.CallbackQuery):
     await callback.message.answer(
+        f"💰 Цена / Price: {CFG.price_ru} | {CFG.price_usd}\n\n"
         f"💳 РФ: `{CFG.pay_ru}`\n"
         f"🅿️ PayPal: `{CFG.pay_paypal}`\n\n"
         f"Пришлите фото чека. / Send photo of the receipt.",
@@ -215,9 +217,7 @@ async def cb_pay(callback: types.CallbackQuery):
 @dp.message(F.photo, F.chat.type == ChatType.PRIVATE)
 async def handle_receipt(message: types.Message):
     if message.from_user.id == CFG.admin_id: return
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Одобрить", callback_data=f"app_{message.from_user.id}")],
-        [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"ref_{message.from_user.id}")]
+    kb = InlineKeyboardMarkup(inline_keyboard=,
     ])
     await bot.send_photo(CFG.admin_id, message.photo[-1].file_id, caption=f"Чек от {message.from_user.full_name}\nID: `{message.from_user.id}`", reply_markup=kb)
     await message.answer("🧨 Чек на проверке. / Receipt in verification.")
@@ -231,7 +231,6 @@ async def cb_decision(callback: types.CallbackQuery):
     
     if action == "app":
         u_info = await bot.get_chat(uid)
-        # СОХРАНЯЕМ ИМЯ ПРИ ОДОБРЕНИИ
         await subs_collection.update_one(
             {"user_id": uid}, 
             {"$set": {
