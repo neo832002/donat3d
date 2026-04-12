@@ -105,13 +105,15 @@ async def show_stats_logic(chat_id: int):
         exp = u.get("expire_date")
         date_s = exp.strftime('%d.%m.%Y') if exp else "Ожидает / Waiting"
         text = f"👤 {name}\nID: `{uid}`\n📅 До: {date_s}"
-        # Исправлена скобка в InlineKeyboardMarkup
-        kb = InlineKeyboardMarkup(inline_keyboard=[])
+        # ИСПРАВЛЕНО: Добавлены скобки []
+        kb = InlineKeyboardMarkup(inline_keyboard=
+        ])
         await bot.send_message(chat_id, text, reply_markup=kb)
 
 async def clear_db_logic(chat_id: int):
-    # Исправлена скобка в InlineKeyboardMarkup
-    kb = InlineKeyboardMarkup(inline_keyboard=[])
+    # ИСПРАВЛЕНО: Добавлены скобки []
+    kb = InlineKeyboardMarkup(inline_keyboard=
+    ])
     await bot.send_message(chat_id, "🧨 ВНИМАНИЕ! Очистить базу данных? Это удалит всех пользователей из базы.", reply_markup=kb)
 
 # --- Subscription activation ---
@@ -149,7 +151,7 @@ async def cmd_stats(message: types.Message):
 @dp.callback_query(F.data.startswith("kick_"))
 async def cb_kick(callback: types.CallbackQuery):
     if callback.from_user.id == CFG.admin_id:
-        # Исправлено разделение строки для получения ID
+        # ИСПРАВЛЕНО: Извлечение uid из строки
         uid = int(callback.data.split("_")[1])
         if await kick_user(uid):
             await callback.message.edit_text("✅ Удален из базы и канала.")
@@ -159,12 +161,10 @@ async def cb_kick(callback: types.CallbackQuery):
 @dp.message(Command("start"), F.chat.type == ChatType.PRIVATE)
 async def cmd_start(message: types.Message):
     if message.from_user.id == CFG.admin_id:
-        # Исправлены скобки клавиатуры
         kb = InlineKeyboardMarkup(inline_keyboard=
         ])
         await message.answer("🛠 Админ-панель / Admin panel:", reply_markup=kb)
     else:
-        # Исправлены скобки клавиатуры и лишние запятые
         kb = InlineKeyboardMarkup(inline_keyboard=,
         ])
         text = (
@@ -207,8 +207,9 @@ async def check_user_sub(event: types.Message | types.CallbackQuery):
 
 @dp.callback_query(F.data == "pay")
 async def cb_pay(callback: types.CallbackQuery):
-    # Исправлены скобки клавиатуры
-    kb = InlineKeyboardMarkup(inline_keyboard=[])
+    # ИСПРАВЛЕНО: Добавлены скобки []
+    kb = InlineKeyboardMarkup(inline_keyboard=
+    ])
     await callback.message.answer(
         f"💰 Цена / Price: {CFG.price_ru} | {CFG.price_usd}\n\n"
         f"💳 РФ: `{CFG.pay_ru}`\n"
@@ -222,7 +223,6 @@ async def cb_pay(callback: types.CallbackQuery):
 @dp.message(F.photo, F.chat.type == ChatType.PRIVATE)
 async def handle_receipt(message: types.Message):
     if message.from_user.id == CFG.admin_id: return
-    # Исправлены скобки клавиатуры и запятые
     kb = InlineKeyboardMarkup(inline_keyboard=,
     ])
     await bot.send_photo(CFG.admin_id, message.photo[-1].file_id, 
