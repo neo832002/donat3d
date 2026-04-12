@@ -105,13 +105,11 @@ async def show_stats_logic(chat_id: int):
         exp = u.get("expire_date")
         date_s = exp.strftime('%d.%m.%Y') if exp else "Ожидает / Waiting"
         text = f"👤 {name}\nID: `{uid}`\n📅 До: {date_s}"
-        # ИСПРАВЛЕНО: Добавлены скобки
         kb = InlineKeyboardMarkup(inline_keyboard=
         ])
         await bot.send_message(chat_id, text, reply_markup=kb)
 
 async def clear_db_logic(chat_id: int):
-    # ИСПРАВЛЕНО: Добавлены скобки
     kb = InlineKeyboardMarkup(inline_keyboard=
     ])
     await bot.send_message(chat_id, "🧨 ВНИМАНИЕ! Очистить базу данных? Это удалит всех пользователей из базы.", reply_markup=kb)
@@ -160,12 +158,10 @@ async def cb_kick(callback: types.CallbackQuery):
 @dp.message(Command("start"), F.chat.type == ChatType.PRIVATE)
 async def cmd_start(message: types.Message):
     if message.from_user.id == CFG.admin_id:
-        # ИСПРАВЛЕНО: Добавлены скобки
         kb = InlineKeyboardMarkup(inline_keyboard=,
         ])
         await message.answer("🛠 Админ-панель / Admin panel:", reply_markup=kb)
     else:
-        # ИСПРАВЛЕНО: Добавлены скобки
         kb = InlineKeyboardMarkup(inline_keyboard=,
         ])
         text = (
@@ -208,7 +204,6 @@ async def check_user_sub(event: types.Message | types.CallbackQuery):
 
 @dp.callback_query(F.data == "pay")
 async def cb_pay(callback: types.CallbackQuery):
-    # ИСПРАВЛЕНО: Добавлены скобки
     kb = InlineKeyboardMarkup(inline_keyboard=
     ])
     await callback.message.answer(
@@ -224,7 +219,6 @@ async def cb_pay(callback: types.CallbackQuery):
 @dp.message(F.photo, F.chat.type == ChatType.PRIVATE)
 async def handle_receipt(message: types.Message):
     if message.from_user.id == CFG.admin_id: return
-    # ИСПРАВЛЕНО: Добавлены скобки
     kb = InlineKeyboardMarkup(inline_keyboard=
     ])
     await bot.send_photo(CFG.admin_id, message.photo[-1].file_id, 
