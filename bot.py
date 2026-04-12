@@ -15,13 +15,13 @@ from aiohttp import web
 class Config:
     token: str = "8527322806:AAFwNdIeXi2mdbIB7duY3rWoyHXxhL7Q9Pg"
     admin_id: int = 942900279
+    # Ваш юзернейм для связи
+    admin_username: str = "neo832002" 
     channel_id: int = -1003581309063
     db_url: str = os.getenv("MONGODB_URI")
     sub_days: int = 30
-    # Переменные цены
     price_ru: str = "400 руб"
     price_usd: str = "4$"
-    # Реквизиты
     pay_ru: str = "2204120115044840"
     pay_paypal: str = "neo832002@yahoo.com"
     port: int = int(os.getenv("PORT", 10000))
@@ -158,9 +158,8 @@ async def cmd_start(message: types.Message):
         ])
         await message.answer("🛠 Админ-панель / Admin panel:", reply_markup=kb)
     else:
-        kb = InlineKeyboardMarkup(inline_keyboard=,
+        kb = InlineKeyboardMarkup(inline_keyboard=,,
         ])
-        # Добавление стоимости в приветственное сообщение
         text = (
             f"👋 Доступ в канал стоит **{CFG.price_ru}** или **{CFG.price_usd}** за {CFG.sub_days} дней.\n"
             f"👋 Оплатите и пришлите чек.\n\n"
@@ -205,12 +204,15 @@ async def check_user_sub(event: types.Message | types.CallbackQuery):
 
 @dp.callback_query(F.data == "pay")
 async def cb_pay(callback: types.CallbackQuery):
+    kb = InlineKeyboardMarkup(inline_keyboard=
+    ])
     await callback.message.answer(
         f"💰 Цена / Price: {CFG.price_ru} | {CFG.price_usd}\n\n"
         f"💳 РФ: `{CFG.pay_ru}`\n"
         f"🅿️ PayPal: `{CFG.pay_paypal}`\n\n"
-        f"Пришлите фото чека. / Send photo of the receipt.",
-        parse_mode="Markdown"
+        f"Пришлите фото чека в этот чат или администратору.",
+        parse_mode="Markdown",
+        reply_markup=kb
     )
     await callback.answer()
 
