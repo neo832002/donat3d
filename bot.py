@@ -28,19 +28,23 @@ class Config:
     port: int = int(os.getenv("PORT", 10000))
 
 CFG = Config()
+
+# Настройка логирования
 logging.basicConfig(
     level=logging.INFO, 
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    format="%(asctime)s | %(levelname)s | %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 log = logging.getLogger("sub-bot")
 
+# БД и бот
 client = AsyncIOMotorClient(CFG.db_url)
 db = client["sub_bot_db"] 
 subs_collection = db.subs
-
 bot = Bot(token=CFG.token)
 dp = Dispatcher()
+
+# --- Вспомогательные функции ---
 
 async def handle_ping(request):
     return web.Response(text="Bot is alive")
@@ -54,13 +58,13 @@ async def run_http_server():
     await site.start()
 
 async def set_bot_commands():
-    # Команды для обычных пользователей
+    # Меню для всех
     await bot.set_my_commands([
         BotCommand(command="start", description="🏠 Меню / Menu"),
         BotCommand(command="my_sub", description="🔎 Подписка / Subscription")
     ], scope=BotCommandScopeDefault())
     
-    # Полный список команд для админа в меню
+    # Меню для админа (кнопка Menu)
     await bot.set_my_commands([
         BotCommand(command="start", description="🏠 Панель / Admin Panel"),
         BotCommand(command="stats", description="📊 Статистика / Stats"),
@@ -71,6 +75,7 @@ async def init_db():
     await subs_collection.create_index("user_id", unique=True)
 
 async def kick_user(user_id: int):
+    """Исключает из канала и удаляет из БД"""
     try:
         await bot.ban_chat_member(CFG.channel_id, user_id)
         await bot.unban_chat_member(CFG.channel_id, user_id)
@@ -80,10 +85,12 @@ async def kick_user(user_id: int):
     try:
         result = await subs_collection.delete_one({"user_id": user_id})
         return result.deleted_count > 0
-    except Exception:
+    except Exception as e:
+        log.error(f"DB Error: {e}")
         return False
 
 async def check_expirations():
+    """Фоновая проверка истечения срока"""
     while True:
         try:
             now = datetime.now()
@@ -93,27 +100,89 @@ async def check_expirations():
                 if await kick_user(uid):
                     try: 
                         await bot.send_message(uid, "🔴 Подписка истекла. / Subscription expired.")
-                    except Exception: 
+                    except: 
                         pass
-        except Exception:
-            pass
+        except Exception as e:
+            log.error(f"Loop Error: {e}")
         await asyncio.sleep(3600)
 
 async def show_stats_logic(chat_id: int):
+    """Вывод списка пользователей"""
     cursor = subs_collection.find()
     users = await cursor.to_list(length=None)
     if not users:
-        await bot.send_message(chat_id, "База пуста. / DB empty.")
+        await bot.send_message(chat_id, "📭 База данных пуста.")
         return
+
+    await bot.send_message(chat_id, f"📊 Всего пользователей в базе: {len(users)}")
+    
     for u in users:
         uid = u["user_id"]
         name = u.get("full_name") or f"User_{uid}"
         exp = u.get("expire_date")
-        date_s = exp.strftime('%d.%m.%Y') if exp else "Ожидает / Waiting"
+        date_s = exp.strftime('%d.%m.%Y') if exp else "Ожидает входа"
+        
         text = f"👤 {name}\nID: `{uid}`\n📅 До: {date_s}"
-        kb = InlineKeyboardMarkup(inline_keyboard=
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Удалить доступ", callback_data=f"kick_{uid}")]
         ])
         await bot.send_message(chat_id, text, reply_markup=kb, parse_mode="Markdown")
+
+# --- Обработчики ---
+
+@dp.message(Command("start"), F.chat.type == ChatType.PRIVATE)
+async def cmd_start(message: types.Message):
+    if message.from_user.id == CFG.admin_id:
+        # Только кнопка Статистика для админа
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats_call")]
+        ])
+        await message.answer("🛠 Админ-панель: управление подписками.", reply_markup=kb)
+    else:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Оплатить / Pay", callback_data="pay")],
+            [InlineKeyboardButton(text="🔎 Моя подписка / My sub", callback_data="check_my_sub")]
+        ])
+        text = (
+            f"👋 Доступ в канал стоит **{CFG.price_ru}** или **{CFG.price_usd}** за {CFG.sub_days} дней.\n"
+            f"Для покупки нажмите кнопку ниже и пришлите чек."
+        )
+        await message.answer(text, reply_markup=kb, parse_mode="Markdown")
+
+@dp.message(Command("stats"), F.chat.type == ChatType.PRIVATE)
+async def cmd_stats_manual(message: types.Message):
+    if message.from_user.id == CFG.admin_id:
+        await show_stats_logic(message.chat.id)
+
+@dp.message(Command("clear_db"), F.chat.type == ChatType.PRIVATE)
+async def cmd_clear_db(message: types.Message):
+    if message.from_user.id == CFG.admin_id:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🧨 ПОДТВЕРДИТЬ ОЧИСТКУ", callback_data="conf_clear")]
+        ])
+        await message.answer("⚠ Вы уверены? Это удалит ВСЕХ пользователей из базы.", reply_markup=kb)
+
+@dp.callback_query(F.data == "admin_stats_call")
+async def cb_admin_stats(callback: types.CallbackQuery):
+    await show_stats_logic(callback.message.chat.id)
+    await callback.answer()
+
+@dp.callback_query(F.data == "conf_clear")
+async def cb_clear(callback: types.CallbackQuery):
+    if callback.from_user.id == CFG.admin_id:
+        await subs_collection.delete_many({})
+        await callback.message.edit_text("✅ База данных полностью очищена.")
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("kick_"))
+async def cb_kick(callback: types.CallbackQuery):
+    if callback.from_user.id == CFG.admin_id:
+        uid = int(callback.data.split("_")[1])
+        if await kick_user(uid):
+            await callback.message.edit_text(f"✅ Пользователь {uid} удален.")
+        else:
+            await callback.answer("Ошибка при удалении.")
+    await callback.answer()
 
 @dp.chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
 async def on_user_join(event: types.ChatMemberUpdated):
@@ -125,54 +194,7 @@ async def on_user_join(event: types.ChatMemberUpdated):
         await subs_collection.update_one({"user_id": uid}, {"$set": {"expire_date": expire, "status": "active"}})
         try:
             await bot.send_message(uid, f"✅ Подписка активирована до: {expire.strftime('%d.%m.%Y')}")
-        except Exception: 
-            pass
-
-@dp.message(Command("clear_db"), F.chat.type == ChatType.PRIVATE)
-async def cmd_clear_db(message: types.Message):
-    if message.from_user.id == CFG.admin_id:
-        kb = InlineKeyboardMarkup(inline_keyboard=
-        ])
-        await message.answer("🧨 Очистить базу данных? Это удалит всех пользователей из базы.", reply_markup=kb)
-
-@dp.callback_query(F.data == "conf_clear")
-async def cb_clear(callback: types.CallbackQuery):
-    if callback.from_user.id == CFG.admin_id:
-        await subs_collection.delete_many({})
-        await callback.message.edit_text("✅ База полностью очищена.")
-        await callback.answer()
-
-@dp.message(Command("stats"), F.chat.type == ChatType.PRIVATE)
-async def cmd_stats(message: types.Message):
-    if message.from_user.id == CFG.admin_id:
-        await show_stats_logic(message.chat.id)
-
-@dp.callback_query(F.data.startswith("kick_"))
-async def cb_kick(callback: types.CallbackQuery):
-    if callback.from_user.id == CFG.admin_id:
-        uid = int(callback.data.split("_")[1])
-        if await kick_user(uid):
-            await callback.message.edit_text(f"✅ Пользователь {uid} удален.")
-        await callback.answer()
-
-@dp.message(Command("start"), F.chat.type == ChatType.PRIVATE)
-async def cmd_start(message: types.Message):
-    if message.from_user.id == CFG.admin_id:
-        # Для админа только кнопка статистики, остальное в меню команд
-        kb = InlineKeyboardMarkup(inline_keyboard=
-        ])
-        await message.answer("🛠 Админ-панель:", reply_markup=kb)
-    else:
-        kb = InlineKeyboardMarkup(inline_keyboard=,
-        ])
-        text = f"👋 Доступ стоит **{CFG.price_ru}** за {CFG.sub_days} дней.\nПришлите чек после оплаты."
-        await message.answer(text, reply_markup=kb, parse_mode="Markdown")
-
-@dp.callback_query(F.data == "admin_stats_call")
-async def cb_admin_stats(callback: types.CallbackQuery):
-    if callback.from_user.id == CFG.admin_id:
-        await show_stats_logic(callback.message.chat.id)
-    await callback.answer()
+        except: pass
 
 @dp.message(Command("my_sub"), F.chat.type == ChatType.PRIVATE)
 @dp.callback_query(F.data == "check_my_sub")
@@ -181,27 +203,36 @@ async def check_user_sub(event: types.Message | types.CallbackQuery):
     user = await subs_collection.find_one({"user_id": user_id})
     msg = event if isinstance(event, types.Message) else event.message
     if not user:
-        await msg.answer("❌ Нет подписки.")
+        await msg.answer("❌ У вас нет активной подписки.")
     elif user.get("expire_date"):
-        await msg.answer(f"✅ Активна до: {user['expire_date'].strftime('%d.%m.%Y')}")
+        await msg.answer(f"✅ Ваша подписка активна до: {user['expire_date'].strftime('%d.%m.%Y')}")
     elif user.get("status") == "paid":
         link = await bot.create_chat_invite_link(CFG.channel_id, member_limit=1)
-        await msg.answer(f"✅ Оплачено! Вступите: {link.invite_link}")
+        await msg.answer(f"✅ Оплата принята! Вступите в канал: {link.invite_link}")
     if isinstance(event, types.CallbackQuery): await event.answer()
 
 @dp.callback_query(F.data == "pay")
 async def cb_pay(callback: types.CallbackQuery):
-    await callback.message.answer(f"💰 Цена: {CFG.price_ru}\n💳 Карта: `{CFG.pay_ru}`\nПришлите фото чека.")
+    await callback.message.answer(
+        f"💰 Цена: {CFG.price_ru} / {CFG.price_usd}\n"
+        f"💳 Карта: `{CFG.pay_ru}`\n"
+        f"🅿 PayPal: `{CFG.pay_paypal}`\n\n"
+        "После оплаты пришлите скриншот чека в этот чат.",
+        parse_mode="Markdown"
+    )
     await callback.answer()
 
 @dp.message(F.photo, F.chat.type == ChatType.PRIVATE)
 async def handle_receipt(message: types.Message):
     if message.from_user.id == CFG.admin_id: return
-    kb = InlineKeyboardMarkup(inline_keyboard=])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Одобрить", callback_data=f"app_{message.from_user.id}"),
+        InlineKeyboardButton(text="❌ Отклонить", callback_data=f"ref_{message.from_user.id}")
+    ]])
     await bot.send_photo(CFG.admin_id, message.photo[-1].file_id, 
                          caption=f"Чек от {message.from_user.full_name}\nID: `{message.from_user.id}`", 
                          reply_markup=kb)
-    await message.answer("🧨 Чек на проверке.")
+    await message.answer("⏳ Ваш чек отправлен на проверку. Ожидайте.")
 
 @dp.callback_query(F.data.startswith(("app_", "ref_")))
 async def cb_decision(callback: types.CallbackQuery):
@@ -210,12 +241,16 @@ async def cb_decision(callback: types.CallbackQuery):
     uid = int(uid)
     if action == "app":
         u_info = await bot.get_chat(uid)
-        await subs_collection.update_one({"user_id": uid}, {"$set": {"full_name": u_info.full_name, "status": "paid"}}, upsert=True)
+        await subs_collection.update_one(
+            {"user_id": uid}, 
+            {"$set": {"full_name": u_info.full_name, "status": "paid"}}, 
+            upsert=True
+        )
         link = await bot.create_chat_invite_link(chat_id=CFG.channel_id, member_limit=1)
-        await bot.send_message(uid, f"✅ Одобрено! Вход: {link.invite_link}")
+        await bot.send_message(uid, f"✅ Оплата подтверждена! Ссылка на вход:\n{link.invite_link}")
         await callback.message.edit_caption(caption="✅ ОДОБРЕНО")
     else:
-        await bot.send_message(uid, "❌ Чек отклонен.")
+        await bot.send_message(uid, "❌ Ваш чек был отклонен.")
         await callback.message.edit_caption(caption="❌ ОТКЛОНЕНО")
     await callback.answer()
 
@@ -225,6 +260,7 @@ async def main():
     await bot.delete_webhook(drop_pending_updates=True)
     asyncio.create_task(run_http_server()) 
     asyncio.create_task(check_expirations())
+    log.info("Bot started!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
