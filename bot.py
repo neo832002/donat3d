@@ -29,7 +29,6 @@ class Config:
 
 CFG = Config()
 
-# Настройка логирования
 logging.basicConfig(
     level=logging.INFO, 
     format="%(asctime)s | %(levelname)s | %(message)s",
@@ -37,7 +36,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("sub-bot")
 
-# БД и бот
 client = AsyncIOMotorClient(CFG.db_url)
 db = client["sub_bot_db"] 
 subs_collection = db.subs
@@ -58,13 +56,11 @@ async def run_http_server():
     await site.start()
 
 async def set_bot_commands():
-    # Меню для всех
     await bot.set_my_commands([
         BotCommand(command="start", description="🏠 Меню / Menu"),
         BotCommand(command="my_sub", description="🔎 Подписка / Subscription")
     ], scope=BotCommandScopeDefault())
     
-    # Меню для админа (кнопка Menu)
     await bot.set_my_commands([
         BotCommand(command="start", description="🏠 Панель / Admin Panel"),
         BotCommand(command="stats", description="📊 Статистика / Stats"),
@@ -75,7 +71,6 @@ async def init_db():
     await subs_collection.create_index("user_id", unique=True)
 
 async def kick_user(user_id: int):
-    """Исключает из канала и удаляет из БД"""
     try:
         await bot.ban_chat_member(CFG.channel_id, user_id)
         await bot.unban_chat_member(CFG.channel_id, user_id)
@@ -85,12 +80,10 @@ async def kick_user(user_id: int):
     try:
         result = await subs_collection.delete_one({"user_id": user_id})
         return result.deleted_count > 0
-    except Exception as e:
-        log.error(f"DB Error: {e}")
+    except Exception:
         return False
 
 async def check_expirations():
-    """Фоновая проверка истечения срока"""
     while True:
         try:
             now = datetime.now()
@@ -99,15 +92,14 @@ async def check_expirations():
                 uid = u["user_id"]
                 if await kick_user(uid):
                     try: 
-                        await bot.send_message(uid, "🔴 Подписка истекла. / Subscription expired.")
+                        await bot.send_message(uid, "🔴 Подписка истекла.\n🔴 Subscription expired.")
                     except: 
                         pass
-        except Exception as e:
-            log.error(f"Loop Error: {e}")
+        except Exception:
+            pass
         await asyncio.sleep(3600)
 
 async def show_stats_logic(chat_id: int):
-    """Вывод списка пользователей"""
     cursor = subs_collection.find()
     users = await cursor.to_list(length=None)
     if not users:
@@ -133,7 +125,6 @@ async def show_stats_logic(chat_id: int):
 @dp.message(Command("start"), F.chat.type == ChatType.PRIVATE)
 async def cmd_start(message: types.Message):
     if message.from_user.id == CFG.admin_id:
-        # Только кнопка Статистика для админа
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats_call")]
         ])
@@ -141,11 +132,13 @@ async def cmd_start(message: types.Message):
     else:
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="💳 Оплатить / Pay", callback_data="pay")],
-            [InlineKeyboardButton(text="🔎 Моя подписка / My sub", callback_data="check_my_sub")]
+            [InlineKeyboardButton(text="🔎 Моя подписка / My subscription", callback_data="check_my_sub")]
         ])
         text = (
             f"👋 Доступ в канал стоит **{CFG.price_ru}** или **{CFG.price_usd}** за {CFG.sub_days} дней.\n"
-            f"Для покупки нажмите кнопку ниже и пришлите чек."
+            f"Чтобы купить, нажмите кнопку ниже и пришлите чек.\n\n"
+            f"👋 Access to the channel costs **{CFG.price_ru}** or **{CFG.price_usd}** for {CFG.sub_days} days.\n"
+            f"To purchase, click the button below and send a receipt."
         )
         await message.answer(text, reply_markup=kb, parse_mode="Markdown")
 
@@ -193,7 +186,10 @@ async def on_user_join(event: types.ChatMemberUpdated):
         expire = datetime.now() + timedelta(days=CFG.sub_days)
         await subs_collection.update_one({"user_id": uid}, {"$set": {"expire_date": expire, "status": "active"}})
         try:
-            await bot.send_message(uid, f"✅ Подписка активирована до: {expire.strftime('%d.%m.%Y')}")
+            await bot.send_message(uid, 
+                f"✅ Подписка активирована до: {expire.strftime('%d.%m.%Y')}\n"
+                f"✅ Subscription activated until: {expire.strftime('%d.%m.%Y')}"
+            )
         except: pass
 
 @dp.message(Command("my_sub"), F.chat.type == ChatType.PRIVATE)
@@ -203,21 +199,28 @@ async def check_user_sub(event: types.Message | types.CallbackQuery):
     user = await subs_collection.find_one({"user_id": user_id})
     msg = event if isinstance(event, types.Message) else event.message
     if not user:
-        await msg.answer("❌ У вас нет активной подписки.")
+        await msg.answer("❌ У вас нет активной подписки.\n❌ You don't have an active subscription.")
     elif user.get("expire_date"):
-        await msg.answer(f"✅ Ваша подписка активна до: {user['expire_date'].strftime('%d.%m.%Y')}")
+        await msg.answer(
+            f"✅ Ваша подписка активна до: {user['expire_date'].strftime('%d.%m.%Y')}\n"
+            f"✅ Your subscription is active until: {user['expire_date'].strftime('%d.%m.%Y')}"
+        )
     elif user.get("status") == "paid":
         link = await bot.create_chat_invite_link(CFG.channel_id, member_limit=1)
-        await msg.answer(f"✅ Оплата принята! Вступите в канал: {link.invite_link}")
+        await msg.answer(
+            f"✅ Оплата принята! Вступите в канал:\n{link.invite_link}\n\n"
+            f"✅ Payment accepted! Join the channel:\n{link.invite_link}"
+        )
     if isinstance(event, types.CallbackQuery): await event.answer()
 
 @dp.callback_query(F.data == "pay")
 async def cb_pay(callback: types.CallbackQuery):
     await callback.message.answer(
-        f"💰 Цена: {CFG.price_ru} / {CFG.price_usd}\n"
-        f"💳 Карта: `{CFG.pay_ru}`\n"
+        f"💰 Цена / Price: {CFG.price_ru} / {CFG.price_usd}\n"
+        f"💳 Карта / Card: `{CFG.pay_ru}`\n"
         f"🅿 PayPal: `{CFG.pay_paypal}`\n\n"
-        "После оплаты пришлите скриншот чека в этот чат.",
+        "После оплаты пришлите скриншот чека в этот чат.\n"
+        "After payment, send a screenshot of the receipt to this chat.",
         parse_mode="Markdown"
     )
     await callback.answer()
@@ -232,7 +235,10 @@ async def handle_receipt(message: types.Message):
     await bot.send_photo(CFG.admin_id, message.photo[-1].file_id, 
                          caption=f"Чек от {message.from_user.full_name}\nID: `{message.from_user.id}`", 
                          reply_markup=kb)
-    await message.answer("⏳ Ваш чек отправлен на проверку. Ожидайте.")
+    await message.answer(
+        "⏳ Ваш чек отправлен на проверку. Ожидайте.\n"
+        "⏳ Your receipt has been sent for verification. Please wait."
+    )
 
 @dp.callback_query(F.data.startswith(("app_", "ref_")))
 async def cb_decision(callback: types.CallbackQuery):
@@ -247,11 +253,17 @@ async def cb_decision(callback: types.CallbackQuery):
             upsert=True
         )
         link = await bot.create_chat_invite_link(chat_id=CFG.channel_id, member_limit=1)
-        await bot.send_message(uid, f"✅ Оплата подтверждена! Ссылка на вход:\n{link.invite_link}")
-        await callback.message.edit_caption(caption="✅ ОДОБРЕНО")
+        await bot.send_message(uid, 
+            f"✅ Оплата подтверждена! Ссылка на вход:\n{link.invite_link}\n\n"
+            f"✅ Payment confirmed! Invite link:\n{link.invite_link}"
+        )
+        await callback.message.edit_caption(caption="✅ ОДОБРЕНО / APPROVED")
     else:
-        await bot.send_message(uid, "❌ Ваш чек был отклонен.")
-        await callback.message.edit_caption(caption="❌ ОТКЛОНЕНО")
+        await bot.send_message(uid, 
+            "❌ Ваш чек был отклонен администратором.\n"
+            "❌ Your receipt was rejected by the administrator."
+        )
+        await callback.message.edit_caption(caption="❌ ОТКЛОНЕНО / REJECTED")
     await callback.answer()
 
 async def main():
